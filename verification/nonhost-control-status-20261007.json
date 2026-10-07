@@ -1,11 +1,11 @@
 {
-  "build": "building-production-click-fix-20261007",
+  "build": "nonhost-control-fix-20261007",
   "target": "StarCraft 1.23.10.13515 x64",
   "compiled": true,
-  "nativeTestsPassed": 371,
+  "nativeTestsPassed": 363,
   "nativeTestsIgnored": 2,
   "managedTestsPassed": 374,
-  "totalTestsPassed": 745,
+  "totalTestsPassed": 737,
   "liveGameValidated": false,
   "nonhostLiveGameValidated": false,
   "previousReconnectBuildUserReportedTwoGamesPassed": true,
@@ -19,11 +19,6 @@
   "lobbySlotsHostOnly": true,
   "allianceDirection": "own_player_to_computer_only",
   "periodicAllianceReapply": false,
-  "nativeSha256": "61e5829d420e7f9940f5fd15c5aa2d1554a169e6b34a9c8fed02850ebc2dd12a",
-  "launcherSha256": "55f3f061a341507fe25559e0a8e46ee6c2e62dcaad901fa10adaa0d6725ef316",
-  "productionButtonLiveGameValidated": false,
-  "panelActivationEventType": 14,
-  "panelActivationExtendedType": 2,
-  "nestedPanelEventsCapture": false,
-  "productionDispatchUnitsPerRequest": 1
+  "nativeSha256": "015c81bcb609559d7d0e8649f85fe37e764a72845d0cd7d470685674ae3c9d22",
+  "launcherSha256": "55f3f061a341507fe25559e0a8e46ee6c2e62dcaad901fa10adaa0d6725ef316"
 }

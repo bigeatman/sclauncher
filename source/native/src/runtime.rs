@@ -1284,6 +1284,21 @@ fn ensure_panel_binding(runtime: &Runtime) -> Result<(),String> {
     // Exact CAS plus ordinary writable-region validation; no code/protection write.
     unsafe { crate::callback_binding::install(&[slot]) }.map_err(|e|e.to_string())
 }
+// Extended button activation is a native control event too. Init, paint, hover,
+// show and hide notifications must not start snapshots or revoke a group.
+// SCR ControlEvent has ty at +0x18 and a pointer-sized ext_type at +0;
+// pinned samase_scarf dialog analysis identifies ext_type 2 as activation.
+fn observe_panel_call<C>(kind: Option<usize>, extended: Option<usize>, outer: bool,
+    begin: impl FnOnce() -> Option<C>, original: impl FnOnce() -> u32,
+    finish: impl FnOnce(Option<C>)) -> u32
+{
+    let admitted = outer && (matches!(kind, Some(0 | 2 | 4 | 5 | 7 | 8 | 0xf))
+        || (kind == Some(0xe) && extended == Some(2)));
+    let capture = if admitted { begin() } else { None };
+    let result = original();
+    finish(capture);
+    result
+}
 unsafe extern "C" fn panel_callback(control: *const c_void, event: *const c_void) -> u32 {
     let session=SessionCallback::enter();
     let address = PANEL_ORIGINAL.load(Ordering::Acquire);
@@ -1297,35 +1312,42 @@ unsafe extern "C" fn panel_callback(control: *const c_void, event: *const c_void
         // the outer native input. They forward only; the outer snapshot covers
         // the complete tree. A recursively dispatched new input invalidates it.
         if kind != Some(0xe) { CALLBACK_NESTED.with(|flag|flag.set(true)); }
-        return unsafe {original(control,event)};
+        return observe_panel_call(kind, None, false, || None::<Capture>,
+            || unsafe {original(control,event)}, |_| {});
     }
     CALLBACK_NESTED.with(|flag|flag.set(false));
     if !session.active() {
         if session.wrong_thread(){FAULT.store(true,Ordering::Release);}
         return unsafe {original(control,event)};
     }
-    let before = std::panic::catch_unwind(|| {
-        refresh_bindings();
+    let refreshed = std::panic::catch_unwind(refresh_bindings).map(|_|true)
+        .unwrap_or_else(|_|{FAULT.store(true,Ordering::Release);false});
+    let kind = (event as usize).checked_add(0x18).and_then(|p|read_integer(p,2));
+    let extended = if kind == Some(0xe) { read_integer(event as usize,8) } else { None };
+    observe_panel_call(kind, extended, refreshed, || std::panic::catch_unwind(|| {
         let target = crate::gui_capture::Target{control:control as usize,
             slot_address:(control as usize).checked_add(crate::gui_capture::CALLBACK_OFFSET).unwrap_or(0),
             callback:panel_callback as *const () as usize};
         if crate::gui_capture::recheck_target(target,read_memory).is_err() { return None; }
-        // Only keyboard/character/mouse-button input can cause a control. Ignore
-        // periodic and internal widget events, keeping buffer snapshots bounded.
-        let kind = read_integer((event as usize).checked_add(0x18)?,2)?;
-        if !matches!(kind,0 | 2 | 4 | 5 | 7 | 8 | 0xf) { return None; }
-        start_capture()
-    }).unwrap_or_else(|_|{FAULT.store(true,Ordering::Release);None});
+        let capture = start_capture();
+        if capture.is_some() && kind == Some(0xe) {
+            if let Some(runtime) = RUNTIME.get() {
+                let mut state = STATE.lock().unwrap_or_else(|p|p.into_inner());
+                trace_control(runtime, &mut state, "panel-activation-captured", None, None);
+            }
+        }
+        capture
+    }).unwrap_or_else(|_|{FAULT.store(true,Ordering::Release);None}),
     // Preserve both native arguments and consumed return; invoke exactly once.
-    let result = unsafe {original(control,event)};
-    if std::panic::catch_unwind(|| {
-        if let Some(capture)=before {
-            finish_capture(capture);
-            refresh_bindings();
-            pump();
-        } else {refresh_bindings();}
-    }).is_err() {FAULT.store(true,Ordering::Release);}
-    result
+    || unsafe {original(control,event)}, |before| {
+        if std::panic::catch_unwind(|| {
+            if let Some(capture)=before {
+                finish_capture(capture);
+                refresh_bindings();
+                pump();
+            } else {refresh_bindings();}
+        }).is_err() {FAULT.store(true,Ordering::Release);}
+    })
 }
 fn set_init_phase(phase: InitPhase, message: String) {
     let mut current = INIT_MESSAGE.lock().unwrap_or_else(|p| p.into_inner());
@@ -1421,7 +1443,7 @@ fn poll_registration() -> Result<RegistrationPoll, String> {
             CALLBACKS_READY.store(true, Ordering::Release);
             set_init_phase(
                 InitPhase::Ready,
-                "Game session connection ready; nonhost fix 20261007; live validation pending"
+                "Game session connection ready; production button fix 20261007; live validation pending"
                     .into(),
             );
             set_init_diagnostic(format!("READY; changed={}; {detail}", changed.len()));

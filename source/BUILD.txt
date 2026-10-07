@@ -19,6 +19,6 @@ verification/AllianceTests.cs is a separate model/layout fixture with a Native s
 Compile it with source/managed/AllianceSnapshot.cs and AllianceOverlayForm.cs, x64,
 Drawing/Forms references and warnaserror. Do not combine it with production Native.cs.
 
-Published native runtime: nonhost-control-fix-20261007.
+Published native runtime: building-production-click-fix-20261007.
 Other runtime components remain the validated game-session reconnect release.
 Current test counts and source correspondence: TEST-REPORT.md and verification/README.md.

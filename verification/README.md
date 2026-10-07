@@ -1,10 +1,12 @@
 # 검증 기록 구분
 
-현재 native 배포본은 `nonhost-control-fix-20261007`입니다. `nonhost-native-tests.log`는 전체 공개 native 자체 검사 363개 통과·외부 이미지 2개 미실행 기록입니다. `nonhost-source-build-match.json`은 이번 빌드의 Rust 25개와 Cargo/build 입력 3개가 첨부 소스와 일치함을 기록합니다.
+현재 native 배포본은 `building-production-click-fix-20261007`입니다. `building-production-native-tests.log`는 전체 공개 native 자체 검사 371개 통과·외부 이미지 2개 미실행 기록입니다. `building-production-source-build-match.json`은 이번 빌드의 Rust 25개와 Cargo/build 입력 3개가 첨부 소스와 일치함을 기록합니다.
 
-`nonhost-managed-tests.log`는 이번에 다시 실행한 관리 검사 177 + 79 + 118 = 374개 기록입니다. 현재 자체 검사 합계는 737개입니다. 루트 `STATUS.json`과 `TEST-REPORT.md`는 이번 수정본에 대응합니다. 실제 비방장 게임 검증은 아직 남아 있습니다.
+`building-production-managed-tests.log`는 이번에 다시 실행한 관리 검사 177 + 79 + 118 = 374개 기록입니다. 현재 자체 검사 합계는 745개입니다. 루트 `STATUS.json`과 `TEST-REPORT.md`는 이번 수정본에 대응합니다. 실제 게임 생산 버튼 검증은 아직 남아 있습니다.
 
-그 밖의 기존 로그, `public-native-tests.log`, `native-source-build-match.json`, `managed-source-build-match.json`, `game-session-reconnect-report-20261007.md`, `game-session-reconnect-status-20261007.json`은 직전 재연결 배포본의 과거 기록입니다. 과거 원본 배포 검사 수는 native 361 + managed 374 = 735개이고, 당시 공개 소스는 외부 자료 검사 3개를 제외해 native 358 + managed 374 = 732개였습니다. 과거 보고서의 실게임 미검증 표기는 작성 당시 상태입니다. 이후 사용자가 두 판 연속 정상 유지를 확인했습니다.
+`nonhost-*` 기록과 `nonhost-control-report-20261007.md`, `nonhost-control-status-20261007.json`은 직전 비방장 게임 판정 수정본의 과거 기록입니다. 당시 native 363 + managed 374 = 737개가 통과했고 실제 비방장 게임 확인은 남아 있었습니다.
+
+그 밖의 기존 로그, `public-native-tests.log`, `native-source-build-match.json`, `managed-source-build-match.json`, `game-session-reconnect-report-20261007.md`, `game-session-reconnect-status-20261007.json`은 이전 재연결 배포본의 과거 기록입니다. 과거 원본 배포 검사 수는 native 361 + managed 374 = 735개이고, 당시 공개 소스는 외부 자료 검사 3개를 제외해 native 358 + managed 374 = 732개였습니다. 과거 보고서의 실게임 미검증 표기는 작성 당시 상태입니다. 이후 사용자가 두 판 연속 정상 유지를 확인했습니다.
 
 공개 소스에는 설치 게임의 `installed-units.dat`, upstream 전체 복사 `upstream-struct-layouts.rs`, 이를 직접 포함하던 검사 3개, 로컬 설치 경로가 담긴 원본 검사 JSON을 포함하지 않습니다. 일반 자체 배열·메모리·파일 검사는 유지하며 현재 DLL은 이번 공개 소스로 빌드했습니다.
 

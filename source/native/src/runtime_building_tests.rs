@@ -618,3 +618,237 @@ fn actual_dispatch_reference_guard_accepts_one_egg_but_rejects_manual_selection_
     assert!(active_selection_ids(&runtime, &state).as_deref() != Some(state.last_selection.as_slice()));
     assert_eq!(f.globals[9], 3); assert_eq!(state.sent, 0);
 }
+// All callbacks below operate only on the fixture's owned byte buffer. The
+// helper is the same admission/call-order helper used by panel_callback.
+fn run_owned_panel_event(
+    fixture: &std::cell::RefCell<Fixture>, runtime: &Runtime,
+    state: &std::cell::RefCell<State>, kind: Option<usize>, extended: Option<usize>,
+    outer: bool, output: &[u8], order: &std::cell::RefCell<Vec<&'static str>>,
+) -> u32 {
+    observe_panel_call(kind, extended, outer,
+        || {
+            order.borrow_mut().push("begin");
+            Some(capture_owned_callback(&fixture.borrow(), runtime, &state.borrow()))
+        },
+        || {
+            order.borrow_mut().push("original");
+            append_owned_callback(&mut fixture.borrow_mut(), output);
+            0x1357_2468
+        },
+        |capture| {
+            order.borrow_mut().push(if capture.is_some() { "finish" } else { "finish-none" });
+            if let Some(capture) = capture {
+                complete_captured_control(runtime, &mut state.borrow_mut(), capture, false, 7);
+            }
+        })
+}
+
+#[test]
+fn panel_activation_production_reaches_all_stock_tp_producers_in_every_player_slot() {
+    use std::cell::RefCell;
+    for (kind, race, unit) in [(106, 2, 7), (111, 2, 0), (113, 2, 5), (114, 2, 8),
+        (154, 4, 64), (155, 4, 83), (160, 4, 65), (167, 4, 70)] {
+        for owner in 0..8 {
+            for count in [1, 4, 17] {
+                let mut f = Fixture::new(count, owner, kind);
+                f.metadata(kind, 1, race | 0x20);
+                let mut runtime = f.runtime();
+                if owner % 2 == 0 { runtime.metadata = None; }
+                let selection = *f.selection;
+                let units = f.units.to_vec();
+                let state = RefCell::new(building_state(&f, kind));
+                let fixture = RefCell::new(f);
+                let order = RefCell::new(Vec::new());
+                let command = train_packet(unit);
+                assert_eq!(run_owned_panel_event(&fixture, &runtime, &state,
+                    Some(0xe), Some(2), true, &command, &order), 0x1357_2468);
+                assert_eq!(order.into_inner(), ["begin", "original", "finish"]);
+                let state = state.borrow();
+                assert!(state.active, "kind={kind}, owner={owner}: {}", state.message);
+                assert_eq!(state.count, count);
+                assert_eq!(state.pending.len(), count - 1);
+                assert_eq!(state.sent, 0); // No real sender is invoked.
+                for (index, job) in state.pending.iter().enumerate() {
+                    assert_eq!(job.ids, ids(&[index as u32 + 1], 1, 13));
+                    assert_eq!(job.restore, ids(&[0], 1, 13));
+                    assert_eq!(job.command, command);
+                    let plan = crate::batch::plan_one(&job.ids, &job.restore, &job.command, 480).unwrap();
+                    assert_eq!(capture_selection(&plan[0]), Some(job.ids.clone()));
+                    assert_eq!(plan[1], command);
+                    assert_eq!(capture_selection(&plan[2]), Some(state.last_selection.clone()));
+                }
+                let f = fixture.borrow();
+                assert_eq!(*f.selection, selection);
+                assert_eq!(f.units.as_ref(), units.as_slice());
+                assert_eq!(f.globals[9], command.len());
+                assert_eq!(&f.outgoing_buffer[..command.len()], command.as_slice());
+                assert!(f.outgoing_buffer[command.len()..].iter().all(|byte| *byte == 0));
+            }
+        }
+    }
+}
+
+#[test]
+fn panel_activation_repeated_train_clicks_are_additive_without_retraining_reference() {
+    use std::cell::RefCell;
+    let mut f = Fixture::new(5, 3, 111); f.metadata(111, 1, 0x22);
+    let runtime = f.runtime(); let selection = *f.selection;
+    let state = RefCell::new(building_state(&f, 111)); let fixture = RefCell::new(f);
+    let command = train_packet(0); let order = RefCell::new(Vec::new());
+    for requested in 1..=3 {
+        assert_eq!(run_owned_panel_event(&fixture, &runtime, &state,
+            Some(0xe), Some(2), true, &command, &order), 0x1357_2468);
+        assert_eq!(state.borrow().pending.len(), requested * 4);
+        assert!(state.borrow().pending.iter().all(|job|
+            job.ids.len() == 1 && job.command == command && !job.ids.contains(&job.restore[0])));
+        assert_eq!(fixture.borrow().globals[9], requested * command.len());
+    }
+    assert_eq!(*fixture.borrow().selection, selection);
+    assert_eq!(&fixture.borrow().outgoing_buffer[..9], [command.as_slice(); 3].concat().as_slice());
+    assert_eq!(order.into_inner(), ["begin", "original", "finish"].repeat(3));
+}
+
+#[test]
+fn descendant_activation_is_forwarded_once_and_only_outer_capture_queues_copies() {
+    use std::cell::RefCell;
+    let mut f = Fixture::new(4, 5, 160); f.metadata(160, 1, 0x24);
+    let runtime = f.runtime(); let selection = *f.selection;
+    let state = RefCell::new(building_state(&f, 160)); let fixture = RefCell::new(f);
+    let order = RefCell::new(Vec::new()); let command = train_packet(65);
+    let result = observe_panel_call(Some(0xe), Some(2), true,
+        || {
+            order.borrow_mut().push("begin");
+            Some(capture_owned_callback(&fixture.borrow(), &runtime, &state.borrow()))
+        },
+        || {
+            order.borrow_mut().push("outer-original");
+            let nested = observe_panel_call::<Capture>(Some(0xe), Some(2), false,
+                || panic!("descendant must not capture again"),
+                || {
+                    order.borrow_mut().push("nested-original");
+                    append_owned_callback(&mut fixture.borrow_mut(), &command);
+                    0x2468
+                },
+                |capture| {
+                    assert!(capture.is_none());
+                    order.borrow_mut().push("nested-finish-none");
+                });
+            assert_eq!(nested, 0x2468);
+            0x1357
+        },
+        |capture| {
+            order.borrow_mut().push("outer-finish");
+            complete_captured_control(&runtime, &mut state.borrow_mut(), capture.unwrap(), false, 7);
+        });
+    assert_eq!(result, 0x1357);
+    assert_eq!(order.into_inner(), ["begin", "outer-original", "nested-original", "nested-finish-none", "outer-finish"]);
+    assert_eq!(state.borrow().pending.len(), 3);
+    assert!(state.borrow().pending.iter().all(|job| job.command == command));
+    assert_eq!(fixture.borrow().globals[9], 3);
+    assert_eq!(*fixture.borrow().selection, selection);
+}
+
+#[test]
+fn panel_activation_without_observed_append_keeps_group_without_synthetic_production() {
+    use std::cell::RefCell;
+    let f = Fixture::new(4, 2, 111); let runtime = f.runtime();
+    let state = RefCell::new(building_state(&f, 111)); let fixture = RefCell::new(f);
+    let order = RefCell::new(Vec::new());
+    assert_eq!(run_owned_panel_event(&fixture, &runtime, &state,
+        Some(0xe), Some(2), true, &[], &order), 0x1357_2468);
+    assert!(state.borrow().active); assert!(state.borrow().pending.is_empty());
+    assert_eq!(state.borrow().sent, 0); assert_eq!(fixture.borrow().globals[9], 0);
+    assert_eq!(order.into_inner(), ["begin", "original", "finish"]);
+}
+
+#[test]
+fn panel_init_visibility_hover_and_unknown_events_forward_without_capture() {
+    use std::cell::RefCell;
+    for (kind, extended) in [(Some(0xe), Some(0)), (Some(0xe), Some(0xa)),
+        (Some(0xe), Some(0xd)), (Some(0xe), Some(0xe)), (Some(0xe), Some(4)), (Some(0xe), Some(6)),
+        (Some(0xe), None), (Some(3), Some(2)), (Some(6), Some(2)),
+        (Some(0x10), Some(2)), (None, Some(2)), (None, None)] {
+        let f = Fixture::new(4, 1, 111); let runtime = f.runtime();
+        let state = RefCell::new(building_state(&f, 111)); let fixture = RefCell::new(f);
+        let order = RefCell::new(Vec::new());
+        assert_eq!(run_owned_panel_event(&fixture, &runtime, &state,
+            kind, extended, true, &[], &order), 0x1357_2468);
+        assert_eq!(order.into_inner(), ["original", "finish-none"]);
+        assert!(state.borrow().active); assert!(state.borrow().pending.is_empty());
+        assert_eq!(fixture.borrow().globals[9], 0);
+    }
+}
+
+#[test]
+fn panel_activation_does_not_relax_exact_command_append_validation() {
+    use std::cell::RefCell;
+    let command = train_packet(0);
+    let selection = selection_record(&ids(&[0], 1, 13)).unwrap();
+    for output in [vec![0x1f, 0], [command.clone(), command.clone()].concat(),
+        [selection, command.clone()].concat(), vec![0x30, 1], vec![0x1f, 106, 0]] {
+        let mut f = Fixture::new(4, 1, 111); f.metadata(111, 1, 0x22);
+        let runtime = f.runtime(); let native_selection = *f.selection;
+        let state = RefCell::new(building_state(&f, 111)); let fixture = RefCell::new(f);
+        let order = RefCell::new(Vec::new());
+        run_owned_panel_event(&fixture, &runtime, &state,
+            Some(0xe), Some(2), true, &output, &order);
+        assert!(!state.borrow().active, "output={output:?}");
+        assert!(state.borrow().pending.is_empty());
+        assert_eq!(*fixture.borrow().selection, native_selection);
+        assert_eq!(fixture.borrow().globals[9], output.len());
+        assert_eq!(&fixture.borrow().outgoing_buffer[..output.len()], output.as_slice());
+        assert_eq!(order.into_inner(), ["begin", "original", "finish"]);
+    }
+}
+
+#[test]
+fn panel_activation_larva_morph_captures_original_egg_before_queueing_other_larvae() {
+    use std::cell::RefCell;
+    let f = Fixture::new(27, 6, 35); let mut runtime = f.runtime(); runtime.metadata = None;
+    let selection = *f.selection; let state = RefCell::new(building_state(&f, 35));
+    let fixture = RefCell::new(f); let command = morph_packet(37);
+    let order = RefCell::new(Vec::new());
+    let result = observe_panel_call(Some(0xe), Some(2), true,
+        || {
+            order.borrow_mut().push("begin");
+            Some(capture_owned_callback(&fixture.borrow(), &runtime, &state.borrow()))
+        },
+        || {
+            order.borrow_mut().push("original");
+            let mut f = fixture.borrow_mut();
+            append_owned_callback(&mut f, &command);
+            f.write_u16(0, 0x8c, 36); f.write_u32(0, 0x140, 0);
+            0x7654
+        },
+        |capture| {
+            order.borrow_mut().push("finish");
+            complete_captured_control(&runtime, &mut state.borrow_mut(), capture.unwrap(), false, 7);
+        });
+    assert_eq!(result, 0x7654);
+    assert_eq!(order.into_inner(), ["begin", "original", "finish"]);
+    let state = state.borrow();
+    assert!(state.active, "{}", state.message); assert_eq!(state.count, 27);
+    assert_eq!(state.pending.len(), 3);
+    assert_eq!(state.pending.iter().map(|job| job.ids.len()).sum::<usize>(), 26);
+    assert!(state.pending.iter().all(|job| job.command == command
+        && !job.ids.contains(&state.last_selection[0]) && job.restore == state.last_selection));
+    for job in &state.pending { assert!(validate_pending_reference(&runtime, &state, job).is_ok()); }
+    assert_eq!(*fixture.borrow().selection, selection);
+    assert_eq!(fixture.borrow().globals[9], 3); assert_eq!(state.sent, 0);
+}
+
+#[test]
+fn previous_panel_keyboard_and_mouse_inputs_keep_exact_control_observation() {
+    use std::cell::RefCell;
+    for kind in [0, 2, 4, 5, 7, 8, 0xf] {
+        let mut f = Fixture::new(4, 0, 111); f.metadata(111, 1, 0x22); let runtime = f.runtime();
+        let state = RefCell::new(building_state(&f, 111)); let fixture = RefCell::new(f);
+        let order = RefCell::new(Vec::new()); let command = train_packet(0);
+        assert_eq!(run_owned_panel_event(&fixture, &runtime, &state,
+            Some(kind), None, true, &command, &order), 0x1357_2468);
+        assert_eq!(order.into_inner(), ["begin", "original", "finish"]);
+        assert!(state.borrow().active); assert_eq!(state.borrow().pending.len(), 3);
+        assert!(state.borrow().pending.iter().all(|job| job.command == command));
+        assert_eq!(fixture.borrow().globals[9], command.len());
+    }
+}
