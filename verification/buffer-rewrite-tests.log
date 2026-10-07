@@ -1,0 +1,12 @@
+
+running 7 tests
+test tests::low_addresses_and_arithmetic_overflow_are_refused ... ok
+test tests::executable_guard_writecopy_and_uncommitted_regions_are_refused ... ok
+test tests::ordinary_writable_private_mapped_and_image_data_are_supported ... ok
+test tests::invalid_target_addresses_are_refused_before_any_packet_read ... ok
+test tests::the_whole_five_byte_packet_must_fit_one_region ... ok
+test tests::stale_expected_packet_is_refused_without_mutating_owned_bytes ... ok
+test tests::owned_vector_rewrite_preserves_every_byte_outside_the_packet ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,22 @@
+[package]
+name = "sc-multi-test-native"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "sc_multi_test"
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[dependencies]
+samase_scarf = { git = "https://github.com/tec27/samase_scarf.git", rev = "4ecc2f8466292c125f824fbeb9d3d3fb39236bf5" }
+scarf = { git = "https://github.com/neivv/scarf", rev = "e859c8bc890304e74a3fcfc161feadc717260f4d" }
+
+[dependencies.winapi]
+version = "0.3"
+features = ["handleapi", "libloaderapi", "processthreadsapi", "memoryapi", "synchapi", "winbase", "winnt", "fileapi", "winuser", "sysinfoapi"]

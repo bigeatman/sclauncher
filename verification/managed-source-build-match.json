@@ -1,0 +1,82 @@
+[
+  {
+    "file": "AllianceEditsFile.cs",
+    "sha256": "f65335c97b5651c52ca746ac4bb2ec2a48f31bb10fc0b947ba8db385b655a379",
+    "matched": true
+  },
+  {
+    "file": "AllianceOverlayForm.cs",
+    "sha256": "001641a3d672b06391bf309e12c17f83b66bee236b4d9a9c8c8ba8e8162f81ee",
+    "matched": true
+  },
+  {
+    "file": "AllianceSnapshot.cs",
+    "sha256": "35c63a30737fdd51c179b2748f3a8a10c6cab99634d1fffa276e1add83e9c022",
+    "matched": true
+  },
+  {
+    "file": "LobbyLauncher.cs",
+    "sha256": "48fd86d1f3d3e6a2530c4cbc460e5a2b5058bd5a02cc67ea421d50350cc55440",
+    "matched": true
+  },
+  {
+    "file": "MainForm.cs",
+    "sha256": "a3383dbf48a9a738f7b9d591d8f4e51ad95c222ee4fec8fcc16ed3037a395f7b",
+    "matched": true
+  },
+  {
+    "file": "Native.cs",
+    "sha256": "18d59fd298d152b991e190efb1a6be1a37d1d91086358d9381a2c6f5f2654dc9",
+    "matched": true
+  },
+  {
+    "file": "OriginalFiles.cs",
+    "sha256": "028aec71b038f8e9fdc7977f4fc43c01f59bf0af3f0bd7be1f27e05f5cf1352c",
+    "matched": true
+  },
+  {
+    "file": "OverlayForm.cs",
+    "sha256": "e6d0673313595d3c8c1529bcf46f4022ce348f2abf7f8bb606c55b6fb555a7b5",
+    "matched": true
+  },
+  {
+    "file": "Program.cs",
+    "sha256": "70e780c851a422cdae91fe3b813874a083b5fe5f082661e5161386e349b48933",
+    "matched": true
+  },
+  {
+    "file": "SelectionHud.cs",
+    "sha256": "e41fde0c4e60a30b8c62fe672fcd7d1746cf48f2fdef13510bfe3ce53938b79c",
+    "matched": true
+  },
+  {
+    "file": "Snapshot.cs",
+    "sha256": "fa4b73d5957807372fcee2f7c5baf23d8593d5500cf3455bd3cb8f21e7ab4a2b",
+    "matched": true
+  },
+  {
+    "file": "StatusText.cs",
+    "sha256": "444f9111c28fa5799a1cd5b3449f272b0ba9c106b0591ea652bee90dc36397a1",
+    "matched": true
+  },
+  {
+    "file": "TestMonitor.cs",
+    "sha256": "fbc913f5ff2d5d17acca17fc9eb93def5e8294a3396344718d17129d496ef365",
+    "matched": true
+  },
+  {
+    "file": "UnitNames.cs",
+    "sha256": "8021bd59705793880be2abeb5d2bf25e6481dbe2f8e9c0f19a73c2dfdc55a082",
+    "matched": true
+  },
+  {
+    "file": "UnitOverlayForm.cs",
+    "sha256": "5e0cc147e30718d549e5c0e6cd53eacc948e9438fbb80b468f20db21f3741b7d",
+    "matched": true
+  },
+  {
+    "file": "UnitVisuals.cs",
+    "sha256": "098d92e0447f7f2a8a76de0d4b607864ace464e2af93b5ff7369269d9990e074",
+    "matched": true
+  }
+]

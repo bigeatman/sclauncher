@@ -1,0 +1,36 @@
+
+running 31 tests
+test alliance::tests::cannot_toggle_owner_human_or_any_slot_outside_eight_playable_slots ... ok
+test alliance::tests::alliance_presence_excludes_self_and_keeps_computer_only_or_human_only_dialogs ... ok
+test alliance::tests::never_reads_observer_neutral_rows_or_invalid_owner_bases ... ok
+test alliance::tests::check_preserves_existing_allied_victory_and_reserved_two_bit_state ... ok
+test alliance::tests::reads_only_fixed_roster_own_row_and_does_not_guess_colors ... ok
+test alliance::tests::encodes_every_relation_including_unmodified_neutral_slots ... ok
+test alliance::tests::rejects_invalid_relationship_bytes_in_snapshot_and_encoding ... ok
+test alliance::tests::rejects_rescue_neutral_lobby_defeated_observer_and_inactive_controllers ... ok
+test alliance::tests::malformed_active_identity_cannot_create_alliance_presence_or_a_command ... ok
+test alliance::tests::toggles_only_target_computer_and_preserves_concurrent_human_edits_and_high_bits ... ok
+test alliance_requests::tests::apply_protocol_accepts_only_explicit_magic_with_complete_ascii_framing ... ok
+test alliance_requests::tests::explicit_apply_can_change_all_seven_computers_without_touching_neutral_relationships ... ok
+test alliance::tests::unknown_race_and_team_of_computer_other_human_or_owner_do_not_hide_diplomacy ... ok
+test alliance::tests::upstream_player_repr_c_fields_match_reader_offsets_and_stride ... ok
+test alliance_requests::tests::accepts_optional_vision_record_in_both_orders_without_modifying_it ... ok
+test alliance::tests::rejects_unreadable_or_inconsistent_active_player_memory ... ok
+test alliance_requests::tests::core_identity_and_owner_stay_required_for_directly_constructed_snapshots ... ok
+test alliance_requests::tests::explicit_apply_empty_clear_is_parseable_but_never_dispatches_a_command ... ok
+test alliance_requests::tests::explicit_apply_with_one_computer_and_no_other_humans_needs_no_native_append ... ok
+test alliance_requests::tests::parses_exact_bounded_ascii_request_with_lf_crlf_and_optional_last_newline ... ok
+test alliance_requests::tests::directly_constructed_requests_cannot_bypass_protocol_or_target_validation ... ok
+test alliance_requests::tests::explicit_apply_rejects_stale_expected_core_identity_and_ineligible_computers ... ok
+test alliance_requests::tests::rejects_ambiguous_incomplete_duplicate_or_unrelated_native_appends ... ok
+test alliance_requests::tests::explicit_apply_preserves_latest_other_human_computer_and_neutral_values ... ok
+test alliance_requests::tests::accepts_zero_count_clear_and_seven_sorted_changes_only ... ok
+test alliance_requests::tests::rejects_malformed_metadata_line_counts_and_unbounded_or_non_ascii_data ... ok
+test alliance_requests::tests::rejects_stale_expected_values_and_non_computer_or_neutral_targets ... ok
+test alliance_requests::tests::preserves_unsaved_human_changes_other_slots_and_unused_payload_bits ... ok
+test alliance_requests::tests::unknown_race_and_team_do_not_block_computer_edits_or_change_other_payload_bits ... ok
+test alliance_requests::tests::zero_change_request_returns_exact_original_native_alliance_without_a_new_edit ... ok
+test alliance_requests::tests::rejects_bad_slots_duplicate_unsorted_rows_and_non_toggle_values ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

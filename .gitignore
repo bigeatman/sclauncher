@@ -1,0 +1,13 @@
+artifacts/
+**/target/
+source/**/*.exe
+source/**/*.dll
+source/**/*.pdb
+*.tmp
+*.backup
+*.dmp
+mc-*.tsv
+mc-*.txt
+setup.exe
+.vs/
+.idea/

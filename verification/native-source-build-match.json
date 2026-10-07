@@ -1,0 +1,127 @@
+[
+  {
+    "file": "alliance_diagnostics.rs",
+    "sha256": "04dcfaa557e95eb95e38ff18fd1d929f50a1e78ca6d547a001a156f1475f1b37",
+    "matched": true
+  },
+  {
+    "file": "alliance_dialog.rs",
+    "sha256": "cc722b54edd2ecd7f767804ed2620ee6135d6b93e1e834267d14a3227c9fa200",
+    "matched": true
+  },
+  {
+    "file": "alliance_output_context.rs",
+    "sha256": "3bd2d7df2caa906ca903901cdafc8ec2f23f7689c182267beb85557ed9fef362",
+    "matched": true
+  },
+  {
+    "file": "alliance_output_diagnostics.rs",
+    "sha256": "08f10f87aa54cc44d671469e0aebe2eb4ce65cdd26a4c10b4f1fdd25060bcb31",
+    "matched": true
+  },
+  {
+    "file": "alliance_requests.rs",
+    "sha256": "576beca121b76e7bf9a414f4e2ce75d738ef9e297b711ffd7aae2e3381def6d7",
+    "matched": true
+  },
+  {
+    "file": "alliance_ui_probe.rs",
+    "sha256": "5086c7f7781f213f0d3daea93e6e0120d9a22728cf82b65f799123c71001dcfe",
+    "matched": true
+  },
+  {
+    "file": "alliance.rs",
+    "sha256": "3ca7531f3125846f2e30bbea655bdbadbe1eb2b18bf7689a71941885d387e7f0",
+    "matched": true
+  },
+  {
+    "file": "batch.rs",
+    "sha256": "12df0cb1cf0844c29ad43f61aa21542b087e244014a860958a3c3ee8c3b75a71",
+    "matched": true
+  },
+  {
+    "file": "buffer_rewrite.rs",
+    "sha256": "d12b06008dccb45faec4e16248825b7f6f256b6b2a0ffa64a4a72bbe7203d7ba",
+    "matched": true
+  },
+  {
+    "file": "building_commands.rs",
+    "sha256": "a06e014855d58e12f3461b0e3aa4ea52499c38c27fae1bbe1b87a37a707a3c44",
+    "matched": true
+  },
+  {
+    "file": "callback_binding.rs",
+    "sha256": "fb3e84703e553eb76f04b2007065ad5fd098c6895e078e49983f99d1a67300a4",
+    "matched": true
+  },
+  {
+    "file": "callback_startup.rs",
+    "sha256": "041d5c761d8844e89dedaddd45d32495198386d3ed4c486c3ab551195d3b3c5e",
+    "matched": true
+  },
+  {
+    "file": "event_capture.rs",
+    "sha256": "2b8868e4873f54d2c9480f47c458c0a3c3190ca7ee2d8cc06a72999db1c4f27a",
+    "matched": true
+  },
+  {
+    "file": "game_session_diagnostics.rs",
+    "sha256": "ff88c900f0414e6a574616c5c106291e2440a9db313fe13ee2bc67db941252a8",
+    "matched": true
+  },
+  {
+    "file": "game_session.rs",
+    "sha256": "e4a150b0cfadecfd10ca15dcb1880c8f405a3cf6bb661a37d0808d52bc6098be",
+    "matched": true
+  },
+  {
+    "file": "gui_capture.rs",
+    "sha256": "9cbca5eee5c8d5c4cd380200c679ef1ea976fe1424cb4f6c061696e52260eb11",
+    "matched": true
+  },
+  {
+    "file": "lib.rs",
+    "sha256": "3e68a6755ff8fb44eedbda317f8d002fa0940fd59112dee594bfe0b50e5f13b7",
+    "matched": true
+  },
+  {
+    "file": "memory.rs",
+    "sha256": "6e5dd12edc5ee0734375dc8d8058704ffa36862274412359190bdf0258581a88",
+    "matched": true
+  },
+  {
+    "file": "minimap_alliance_button.rs",
+    "sha256": "56a078adfae2c360bcc3f5a60faa7dba830f7407d135ec31c587423d2419ae10",
+    "matched": true
+  },
+  {
+    "file": "resolve_sender.rs",
+    "sha256": "79efdb75c8de79de6b227bd6a55ac46a7c0e3aeea5d3b283d3493d6c990d7264",
+    "matched": true
+  },
+  {
+    "file": "runtime_alliance.rs",
+    "sha256": "1bcf3e5e5a6565bba44da1da4dd005de7eb2826fadb85d0f54c23782a339cdb7",
+    "matched": true
+  },
+  {
+    "file": "runtime_building_tests.rs",
+    "sha256": "796f425b0d4a3dd7b5f37aabfc07531e39b24a9e23e36800fc33de8b5246727c",
+    "matched": true
+  },
+  {
+    "file": "runtime_tests.rs",
+    "sha256": "31293d82d2142bd14d87eed856da81bda809fdc2d35c227c28d8257bbc48d9f6",
+    "matched": true
+  },
+  {
+    "file": "runtime.rs",
+    "sha256": "50a7bc9956f9d907dad4eec7a02628d6363704009becb5ef3f89846b8941050e",
+    "matched": true
+  },
+  {
+    "file": "visuals.rs",
+    "sha256": "75bb0b199e434e1940b55755a3b438200b5f8ac49bd3ff36d7677ca88e23df2d",
+    "matched": true
+  }
+]

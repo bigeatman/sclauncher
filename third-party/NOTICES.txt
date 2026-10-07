@@ -1,0 +1,23 @@
+Third-party source references used by this build
+
+samase_scarf: Markus Heikkinen and contributors; tec27 fork
+Source: https://github.com/tec27/samase_scarf
+Revision: 4ecc2f8466292c125f824fbeb9d3d3fb39236bf5
+
+scarf: Markus Heikkinen and contributors
+Source: https://github.com/neivv/scarf
+Revision: e859c8bc890304e74a3fcfc161feadc717260f4d
+
+The cached checkouts of samase_scarf and scarf contain no top-level license file.
+This notice does not assign an unstated license to those projects.
+These are pinned external Git dependencies, not vendored source in this repository.
+
+Chromium Embedded Framework, branch 2357: The Chromium Embedded Framework Authors
+Source: https://bitbucket.org/chromiumembedded/cef/src/2357/
+The minimal public API declarations in source/lobby/cef2357_minimal.h derive from
+CEF's public C headers. The accompanying BSD license is in third-party/cef-2357/LICENSE.txt.
+
+Other dependency revisions/checksums are fixed in source/native/Cargo.lock.
+Available dependency license files are preserved under third-party/.
+The current native module does not depend on MinHook; historical MinHook notices
+from earlier prototypes are not included in this repository.

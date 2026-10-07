@@ -1,0 +1,27 @@
+[
+  {
+    "File": "SC-Launcher.exe",
+    "Bytes": 105472,
+    "Sha256": "55f3f061a341507fe25559e0a8e46ee6c2e62dcaad901fa10adaa0d6725ef316"
+  },
+  {
+    "File": "CefConnector.exe",
+    "Bytes": 24576,
+    "Sha256": "d9d0d844304ddad2542d6994bac6bbd8a19601e4adac3c361ae31a660db53511"
+  },
+  {
+    "File": "sc_multi_test.dll",
+    "Bytes": 1939968,
+    "Sha256": "521a0a5e476fd058429dcdce1a2cfa24d9f29c1c2a17bea0f831512e840ccb45"
+  },
+  {
+    "File": "sc_lobby_ui.dll",
+    "Bytes": 75683,
+    "Sha256": "f1a13194a71f8bcc7136805e73eef4211c2e57940c240f492a5eade5422bef6f"
+  },
+  {
+    "File": "bootstrap.js",
+    "Bytes": 9380,
+    "Sha256": "bbe4b8239e4a2c83764d9714ad6fe7398ba21f4393fe36e97f248e5ac461416d"
+  }
+]

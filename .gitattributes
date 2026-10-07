@@ -1,0 +1,17 @@
+* text=auto eol=lf
+*.exe binary
+*.dll binary
+*.png binary
+*.js -text
+*.js whitespace=cr-at-eol
+*.sha256 -text
+*.ps1 text eol=crlf
+*.cs text eol=crlf
+*.rs text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.log text eol=lf
+third-party/** whitespace=-blank-at-eof
+verification/*.log whitespace=-blank-at-eof

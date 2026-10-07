@@ -1,0 +1,25 @@
+Run build.ps1 in the repository root on Windows to compile all four components.
+Dependencies: .NET Framework 4 C# compiler, Rust x86_64-pc-windows-gnu target,
+and MinGW GCC on PATH. Cargo.lock pins the Rust dependency revisions.
+The root build.ps1 accepts -Offline when dependencies are already cached.
+Build outputs are written to artifacts/bin and are not committed.
+No build script starts the launcher or game.
+
+Managed: source/managed/build.ps1 compiles only the launcher.
+Connector: source/connector/build.ps1 compiles CefConnector.exe.
+Lobby: source/lobby/build.ps1 compiles sc_lobby_ui.dll against minimal public CEF declarations.
+Native: cargo build --manifest-path source/native/Cargo.toml --target x86_64-pc-windows-gnu --release --locked
+
+Ordinary self-owned checks:
+  source/managed/test.ps1
+  cargo test --manifest-path source/native/Cargo.toml --target x86_64-pc-windows-gnu --release --locked
+Never add --ignored to the public native test invocation: two external image checks are deliberately skipped.
+
+verification/AllianceTests.cs is a separate model/layout fixture with a Native stub.
+Compile it with source/managed/AllianceSnapshot.cs and AllianceOverlayForm.cs, x64,
+Drawing/Forms references and warnaserror. Do not combine it with production Native.cs.
+
+Published runtime binaries remain the validated game-session-reconnect-fix-20261007 build.
+The public native source omits three external-data fixture tests; see verification/README.md.
+Full public default native tests: 358 passed; managed: 374 passed.
+The original binary release verification recorded 361 native +374 managed=735.
