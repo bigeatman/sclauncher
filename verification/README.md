@@ -1,9 +1,10 @@
 # 검증 기록 구분
 
-현재 native 배포본은 `building-production-click-fix-20261007`입니다. `building-production-native-tests.log`는 전체 공개 native 자체 검사 371개 통과·외부 이미지 2개 미실행 기록입니다. `building-production-source-build-match.json`은 이번 빌드의 Rust 25개와 Cargo/build 입력 3개가 첨부 소스와 일치함을 기록합니다.
+현재 native 배포본은 `building-production-child-fix-20261007`입니다. `building-production-child-native-tests.log`는 전체 공개 native 자체 검사 396개 통과·외부 이미지 2개 미실행 기록입니다. `building-production-child-source-build-match.json`은 Rust 26개와 Cargo/build 입력 3개, 총 29개의 일치를 기록합니다. 루트 `STATUS.json`과 `TEST-REPORT.md`는 이번 수정본에 대응합니다. 실게임 생산 확인은 아직 남아 있습니다.
 
-`building-production-managed-tests.log`는 이번에 다시 실행한 관리 검사 177 + 79 + 118 = 374개 기록입니다. 현재 자체 검사 합계는 745개입니다. 루트 `STATUS.json`과 `TEST-REPORT.md`는 이번 수정본에 대응합니다. 실제 게임 생산 버튼 검증은 아직 남아 있습니다.
+관리 코드·바이너리는 변경하지 않았습니다. `building-production-managed-tests.log`는 같은 날 직전 배포 작업에서 실제 실행한 177 + 79 + 118 = 374개 결과입니다. 이번 Native 결과를 합한 검사 수는 770개이며 관리 검사를 다시 실행한 것으로 표시하지 않습니다.
 
+`building-production-native-tests.log`, `building-production-source-build-match.json`, `building-production-click-report-20261007.md`, `building-production-click-status-20261007.json`은 상위 버튼 이벤트 수정본의 과거 기록입니다. 당시 Native 371개가 통과했지만 이후 사용자 확인에서 배럭 3개 중 원래 선택한 한 건물만 생산했습니다. 이번에는 자식 콜백 연결과 실제 관찰 소유 여부 판정을 추가했습니다.
 `nonhost-*` 기록과 `nonhost-control-report-20261007.md`, `nonhost-control-status-20261007.json`은 직전 비방장 게임 판정 수정본의 과거 기록입니다. 당시 native 363 + managed 374 = 737개가 통과했고 실제 비방장 게임 확인은 남아 있었습니다.
 
 그 밖의 기존 로그, `public-native-tests.log`, `native-source-build-match.json`, `managed-source-build-match.json`, `game-session-reconnect-report-20261007.md`, `game-session-reconnect-status-20261007.json`은 이전 재연결 배포본의 과거 기록입니다. 과거 원본 배포 검사 수는 native 361 + managed 374 = 735개이고, 당시 공개 소스는 외부 자료 검사 3개를 제외해 native 358 + managed 374 = 732개였습니다. 과거 보고서의 실게임 미검증 표기는 작성 당시 상태입니다. 이후 사용자가 두 판 연속 정상 유지를 확인했습니다.

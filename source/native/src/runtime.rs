@@ -30,7 +30,7 @@ const MAX_PENDING: usize = 2048;
 type SendCommand = unsafe extern "C" fn(*const u8, usize);
 // Saved caller/target analysis supports this void single-event-pointer ABI.
 // Global callbacks cover map clicks; a separate command-panel callback observes
-// GUI-consumed stop/attack inputs. Other callback paths remain outside this prototype.
+// GUI-consumed stop/attack/production inputs at the panel and its direct buttons.
 type UiCallback = unsafe extern "C" fn(*const c_void);
 // Native SCR Control callback, separately verified from global event callbacks.
 type PanelCallback = unsafe extern "C" fn(*const c_void, *const c_void) -> u32;
@@ -847,7 +847,7 @@ fn pump() {
     reset_state_for_session(&mut state,SESSION_BOUNDARY_EPOCH.load(Ordering::Acquire),unsafe{GetAsyncKeyState(0xc0)}<0);
     // Heap control slots are discovered/bound only while the game's UI thread
     // is dispatching a periodic callback. Worker registration never touches them.
-    let panel_error = ensure_panel_binding(runtime).err();
+    let panel_binding = ensure_panel_binding(runtime);
     let down = unsafe { GetAsyncKeyState(0xc0) } < 0;
     let rising = down && !state.last_key;
     state.last_key = down;
@@ -919,15 +919,15 @@ fn pump() {
             }
         }
     }
-    if panel_error != state.panel_diagnostic {
-        let detail = match panel_error.as_ref() {
-            Some(error) => format!("Command panel capture unavailable; {error}"),
-            None => "Command panel capture bound".into(),
-        };
+    let detail = match panel_binding {
+        Ok(buttons) => format!("Command panel capture bound; buttons={buttons}"),
+        Err(error) => format!("Command panel capture unavailable; {error}"),
+    };
+    if state.panel_diagnostic.as_ref() != Some(&detail) {
         let row = format!("{}\t{}\t{}\t{}\t{}",state.frame,state.count,state.kind,state.sent,detail);
         if state.events.len() >= 256 { state.events.pop_front(); }
         state.events.push_back(row);
-        state.panel_diagnostic = panel_error;
+        state.panel_diagnostic = Some(detail);
     }
     update_visual_frame(runtime, &mut state);
     if runtime.paused.read() != Some(0) {
@@ -1257,88 +1257,160 @@ fn complete_captured_control(runtime: &Runtime, state: &mut State, capture: Capt
 fn callback_control_supported(command: &[u8]) -> bool {
     crate::building_commands::classify(command).is_some()
 }
-fn ensure_panel_binding(runtime: &Runtime) -> Result<(),String> {
+const PANEL_CHILD_PROVIDERS: usize = 16;
+// Providers are immutable and process-lived. Distinct native callbacks receive
+// distinct wrappers, so a recreated control cannot inherit the wrong original.
+static PANEL_CHILD_ORIGINALS: [AtomicUsize; PANEL_CHILD_PROVIDERS] =
+    [const { AtomicUsize::new(0) }; PANEL_CHILD_PROVIDERS];
+fn panel_child_replacements() -> [usize; PANEL_CHILD_PROVIDERS] {
+    [panel_child_callback::<0> as *const () as usize, panel_child_callback::<1> as *const () as usize,
+     panel_child_callback::<2> as *const () as usize, panel_child_callback::<3> as *const () as usize,
+     panel_child_callback::<4> as *const () as usize, panel_child_callback::<5> as *const () as usize,
+     panel_child_callback::<6> as *const () as usize, panel_child_callback::<7> as *const () as usize,
+     panel_child_callback::<8> as *const () as usize, panel_child_callback::<9> as *const () as usize,
+     panel_child_callback::<10> as *const () as usize, panel_child_callback::<11> as *const () as usize,
+     panel_child_callback::<12> as *const () as usize, panel_child_callback::<13> as *const () as usize,
+     panel_child_callback::<14> as *const () as usize, panel_child_callback::<15> as *const () as usize]
+}
+fn choose_panel_child_provider(callback: usize, originals: &[AtomicUsize], replacements: &[usize])
+    -> Result<(usize, usize), &'static str>
+{
+    if callback == 0 || originals.len() != replacements.len() {
+        return Err("Invalid command button provider");
+    }
+    if let Some(index) = replacements.iter().position(|&p|p == callback) {
+        let original = originals[index].load(Ordering::Acquire);
+        return (original != 0 && !replacements.contains(&original)).then_some((index, original))
+            .ok_or("Command button original missing");
+    }
+    for (index, entry) in originals.iter().enumerate() {
+        let observed = entry.load(Ordering::Acquire);
+        if observed == callback { return Ok((index, callback)); }
+        if observed == 0 {
+            match entry.compare_exchange(0,callback,Ordering::AcqRel,Ordering::Acquire) {
+                Ok(_) => return Ok((index,callback)),
+                Err(value) if value == callback => return Ok((index,callback)),
+                Err(_) => (),
+            }
+        }
+    }
+    Err("Command button callback provider limit reached")
+}
+fn ensure_panel_binding(runtime: &Runtime) -> Result<usize,String> {
     if !session_allows_control(){return Err("Waiting for current game UI thread".into());}
     let gui = runtime.gui.as_ref().ok_or("Command panel root unresolved")?;
     let first = gui.first_dialog.read().ok_or("Command panel list unavailable")?;
     let replacement = panel_callback as *const () as usize;
-    let find = || crate::gui_capture::discover_stat_button(first,replacement,
-        |p| p >= gui.code_start && p.checked_add(16).is_some_and(|end| end <= gui.code_end),read_memory);
-    let target = find().map_err(|e|e.to_string())?.ok_or("StatBtn command panel unavailable")?;
+    let children = panel_child_replacements();
+    let is_code = |p: usize| p >= gui.code_start && p.checked_add(16).is_some_and(|end| end <= gui.code_end);
+    let find = || crate::gui_capture::discover_stat_buttons(first,replacement,&children,is_code,read_memory);
+    let panel = find().map_err(|e|e.to_string())?.ok_or("StatBtn command panel unavailable")?;
+    let target = panel.root;
     if target.callback == replacement {
-        return (PANEL_ORIGINAL.load(Ordering::Acquire) != 0).then_some(()).ok_or("Command panel original missing".into());
+        if PANEL_ORIGINAL.load(Ordering::Acquire) == 0 { return Err("Command panel original missing".into()); }
+    } else {
+        // Keep the root provider immutable. Child providers are separately saved.
+        let original = PANEL_ORIGINAL.load(Ordering::Acquire);
+        if original != 0 && original != target.callback { return Err("Command panel callback changed".into()); }
+        if gui.first_dialog.read() != Some(first) || find().map_err(|e|e.to_string())? != Some(panel.clone()) {
+            return Err("Command panel roots changed before binding".into());
+        }
+        crate::gui_capture::recheck_target(target,read_memory).map_err(|e|e.to_string())?;
+        PANEL_ORIGINAL.compare_exchange(0,target.callback,Ordering::AcqRel,Ordering::Acquire)
+            .or_else(|value| if value == target.callback {Ok(value)} else {Err(value)})
+            .map_err(|_|"Command panel original changed")?;
+        let slot = crate::callback_binding::Slot{address:target.slot_address,original:target.callback,replacement};
+        unsafe { crate::callback_binding::install(&[slot]) }.map_err(|e|e.to_string())?;
     }
-    // Every installed wrapper forwards the same verified original. A different
-    // callback provider is never overwritten, even when a new root is allocated.
-    let original = PANEL_ORIGINAL.load(Ordering::Acquire);
-    if original != 0 && original != target.callback { return Err("Command panel callback changed".into()); }
-    if gui.first_dialog.read() != Some(first) || find().map_err(|e|e.to_string())? != Some(target) {
-        return Err("Command panel roots changed before binding".into());
+    for button in &panel.buttons {
+        // Membership, parent, type and exact callback are read again on this UI
+        // thread immediately before CAS. No heap address is cached for later writes.
+        if gui.first_dialog.read() != Some(first) {return Err("Command panel list changed".into());}
+        crate::gui_capture::recheck_stat_child(first,*button,replacement,&children,is_code,read_memory)
+            .map_err(|e|e.to_string())?;
+        let (index, original) = choose_panel_child_provider(button.callback,&PANEL_CHILD_ORIGINALS,&children)
+            .map_err(str::to_string)?;
+        let slot = crate::callback_binding::Slot{address:button.slot_address,original,replacement:children[index]};
+        unsafe { crate::callback_binding::maintain(&[slot]) }.map_err(|e|e.to_string())?;
     }
-    crate::gui_capture::recheck_target(target,read_memory).map_err(|e|e.to_string())?;
-    PANEL_ORIGINAL.compare_exchange(0,target.callback,Ordering::AcqRel,Ordering::Acquire)
-        .or_else(|value| if value == target.callback {Ok(value)} else {Err(value)})
-        .map_err(|_|"Command panel original changed")?;
-    let slot = crate::callback_binding::Slot{address:target.slot_address,original:target.callback,replacement};
-    // During this UI-thread callback, the engine is not destroying its roots.
-    // Exact CAS plus ordinary writable-region validation; no code/protection write.
-    unsafe { crate::callback_binding::install(&[slot]) }.map_err(|e|e.to_string())
+    Ok(panel.buttons.len())
 }
-// Extended button activation is a native control event too. Init, paint, hover,
-// show and hide notifications must not start snapshots or revoke a group.
-// SCR ControlEvent has ty at +0x18 and a pointer-sized ext_type at +0;
-// pinned samase_scarf dialog analysis identifies ext_type 2 as activation.
+// A child can dispatch directly or under a parent that captured nothing. Only
+// an actual outer snapshot owns the observation and suppresses nested capture.
+fn panel_nested_input_changed(kind: Option<usize>, event: usize) -> bool {
+    kind != Some(0xe) && !crate::control_capture::same_event(event)
+}
 fn observe_panel_call<C>(kind: Option<usize>, extended: Option<usize>, outer: bool,
     begin: impl FnOnce() -> Option<C>, original: impl FnOnce() -> u32,
     finish: impl FnOnce(Option<C>)) -> u32
 {
-    let admitted = outer && (matches!(kind, Some(0 | 2 | 4 | 5 | 7 | 8 | 0xf))
-        || (kind == Some(0xe) && extended == Some(2)));
+    let admitted = outer && !crate::control_capture::active()
+        && (matches!(kind, Some(0 | 2 | 4 | 5 | 7 | 8 | 0xf))
+            || (kind == Some(0xe) && extended == Some(2)));
     let capture = if admitted { begin() } else { None };
+    let _lease = capture.as_ref().map(|_|crate::control_capture::Lease::enter());
     let result = original();
     finish(capture);
     result
 }
 unsafe extern "C" fn panel_callback(control: *const c_void, event: *const c_void) -> u32 {
+    unsafe { panel_dispatch(control,event,PANEL_ORIGINAL.load(Ordering::Acquire),None) }
+}
+unsafe extern "C" fn panel_child_callback<const INDEX: usize>(control: *const c_void, event: *const c_void) -> u32 {
+    unsafe { panel_dispatch(control,event,PANEL_CHILD_ORIGINALS[INDEX].load(Ordering::Acquire),Some(INDEX)) }
+}
+unsafe fn panel_dispatch(control: *const c_void, event: *const c_void, address: usize, child: Option<usize>) -> u32 {
     let session=SessionCallback::enter();
-    let address = PANEL_ORIGINAL.load(Ordering::Acquire);
     if address == 0 { FAULT.store(true,Ordering::Release); return 0; }
     let original: PanelCallback = unsafe {std::mem::transmute(address)};
     let previous_depth = CALLBACK_DEPTH.with(|depth| {let old=depth.get();depth.set(old.saturating_add(1));old});
     let _depth = CallbackDepth(previous_depth);
-    if previous_depth != 0 || IN_ORIGINAL.with(Cell::get) {
-        let kind = (event as usize).checked_add(0x18).and_then(|p|read_integer(p,2));
-        // Internal extended widget notifications are synchronous descendants of
-        // the outer native input. They forward only; the outer snapshot covers
-        // the complete tree. A recursively dispatched new input invalidates it.
-        if kind != Some(0xe) { CALLBACK_NESTED.with(|flag|flag.set(true)); }
+    let kind = (event as usize).checked_add(0x18).and_then(|p|read_integer(p,2));
+    if crate::control_capture::active() || IN_ORIGINAL.with(Cell::get) {
+        // Internal extended notifications belong to the outer observed call.
+        // A recursively dispatched new native input still invalidates its snapshot.
+        if panel_nested_input_changed(kind,event as usize) {
+            CALLBACK_NESTED.with(|flag|flag.set(true));
+        }
         return observe_panel_call(kind, None, false, || None::<Capture>,
             || unsafe {original(control,event)}, |_| {});
     }
-    CALLBACK_NESTED.with(|flag|flag.set(false));
+    if previous_depth == 0 { CALLBACK_NESTED.with(|flag|flag.set(false)); }
     if !session.active() {
         if session.wrong_thread(){FAULT.store(true,Ordering::Release);}
         return unsafe {original(control,event)};
     }
     let refreshed = std::panic::catch_unwind(refresh_bindings).map(|_|true)
         .unwrap_or_else(|_|{FAULT.store(true,Ordering::Release);false});
-    let kind = (event as usize).checked_add(0x18).and_then(|p|read_integer(p,2));
     let extended = if kind == Some(0xe) { read_integer(event as usize,8) } else { None };
+    let _event_scope = crate::control_capture::EventScope::enter(event as usize);
     observe_panel_call(kind, extended, refreshed, || std::panic::catch_unwind(|| {
+        let callback = child.map_or(panel_callback as *const () as usize, |index|panel_child_replacements()[index]);
         let target = crate::gui_capture::Target{control:control as usize,
-            slot_address:(control as usize).checked_add(crate::gui_capture::CALLBACK_OFFSET).unwrap_or(0),
-            callback:panel_callback as *const () as usize};
-        if crate::gui_capture::recheck_target(target,read_memory).is_err() { return None; }
+            slot_address:(control as usize).checked_add(crate::gui_capture::CALLBACK_OFFSET).unwrap_or(0),callback};
+        if child.is_some() {
+            let runtime = RUNTIME.get()?;
+            let gui = runtime.gui.as_ref()?;
+            let first = gui.first_dialog.read()?;
+            let children = panel_child_replacements();
+            let is_code = |p: usize| p >= gui.code_start && p.checked_add(16).is_some_and(|end|end <= gui.code_end);
+            if crate::gui_capture::recheck_stat_child(first,target,panel_callback as *const () as usize,
+                &children,is_code,read_memory).is_err() || gui.first_dialog.read() != Some(first) {return None;}
+        } else if crate::gui_capture::recheck_target(target,read_memory).is_err() { return None; }
         let capture = start_capture();
-        if capture.is_some() && kind == Some(0xe) {
-            if let Some(runtime) = RUNTIME.get() {
-                let mut state = STATE.lock().unwrap_or_else(|p|p.into_inner());
-                trace_control(runtime, &mut state, "panel-activation-captured", None, None);
+        if capture.is_some() {
+            CALLBACK_NESTED.with(|flag|flag.set(false));
+            if child.is_some() || kind == Some(0xe) {
+                if let Some(runtime) = RUNTIME.get() {
+                    let mut state = STATE.lock().unwrap_or_else(|p|p.into_inner());
+                    trace_control(runtime, &mut state,
+                        if child.is_some() {"panel-child-captured"} else {"panel-activation-captured"},None,None);
+                }
             }
         }
         capture
     }).unwrap_or_else(|_|{FAULT.store(true,Ordering::Release);None}),
-    // Preserve both native arguments and consumed return; invoke exactly once.
+    // No lock is held across the original; preserve both args and its consumed return.
     || unsafe {original(control,event)}, |before| {
         if std::panic::catch_unwind(|| {
             if let Some(capture)=before {
@@ -1443,7 +1515,7 @@ fn poll_registration() -> Result<RegistrationPoll, String> {
             CALLBACKS_READY.store(true, Ordering::Release);
             set_init_phase(
                 InitPhase::Ready,
-                "Game session connection ready; production button fix 20261007; live validation pending"
+                "Game session connection ready; production child fix 20261007; live validation pending"
                     .into(),
             );
             set_init_diagnostic(format!("READY; changed={}; {detail}", changed.len()));
@@ -1560,6 +1632,8 @@ unsafe fn callback_dispatch(index: usize, event: *const c_void) {
         FAULT.store(true, Ordering::Release);
         None
     });
+    let _control_lease = before.as_ref().map(|_|crate::control_capture::Lease::enter());
+    let _event_scope = before.as_ref().map(|_|crate::control_capture::EventScope::enter(event as usize));
     let alliance_output=std::panic::catch_unwind(||runtime_alliance::begin_output(None)).ok().flatten();
     // The normal original callback is always invoked exactly once. No private
     // mutex is held here; nested callbacks are forwarded and invalidate capture.
@@ -1805,7 +1879,7 @@ fn initialize() -> Result<(), String> {
             // READY is justified only by the complete successful CAS operation.
             INSTALLED.store(true, Ordering::Release);
             STATE.lock().unwrap_or_else(|p| p.into_inner()).note(
-                "Unit control ready; production fix 20261004; live validation pending",
+                "Unit control ready; production child fix 20261007; live validation pending",
             );
             return Ok(());
         }

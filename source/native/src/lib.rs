@@ -2,6 +2,7 @@ mod batch;
 mod building_commands;
 mod callback_binding;
 mod callback_startup;
+mod control_capture;
 mod game_session;
 mod game_session_diagnostics;
 mod event_capture;

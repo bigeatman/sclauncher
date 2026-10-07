@@ -1,11 +1,11 @@
-//! Discovery of the StarCraft Remastered command-panel root callback.
+//! Discovery of StarCraft Remastered command-panel and direct button callbacks.
 //!
-//! This module only reads through caller-supplied bounded readers. It never
-//! follows child controls, changes protection, patches code, invokes callbacks,
-//! or writes a game object. Discovery is not a lifetime reservation: callers
-//! must run on the game's UI thread and recheck the current root immediately
-//! before an exact compare-and-exchange of its callback slot. Never cache a
-//! heap root for a later worker-thread write or teardown restore.
+//! This module reads bounded root lists and direct command-panel button children
+//! through caller-supplied readers. It never changes protection, patches code,
+//! invokes callbacks, or writes a game object. Discovery is not a lifetime
+//! reservation: callers must recheck current membership on the game's UI thread
+//! immediately before an exact callback-slot compare-and-exchange. Never cache
+//! heap controls for later worker-thread writes or teardown restores.
 //!
 //! The x64 SCR Control/BwString layout and two-argument u32 callback contract:
 //! https://github.com/neivv/aise/blob/da4fed681dc09bda7a21c0051f60cdad98cc7226/bw_dat/src/bw/structs.rs
@@ -45,6 +45,11 @@ pub enum DiscoveryError {
     DuplicatePanel,
     UnknownCallback,
     ChangedRoot,
+    InvalidPanelRoot,
+    TooManyChildren,
+    CyclicChildren,
+    WrongParent,
+    ChangedChild,
 }
 impl std::fmt::Display for DiscoveryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -57,6 +62,11 @@ impl std::fmt::Display for DiscoveryError {
             Self::DuplicatePanel => "multiple StatBtn roots",
             Self::UnknownCallback => "callback is outside verified game code",
             Self::ChangedRoot => "root identity or callback changed",
+            Self::InvalidPanelRoot => "StatBtn is not a dialog root",
+            Self::TooManyChildren => "command-panel child count exceeded limit",
+            Self::CyclicChildren => "cyclic command-panel child list",
+            Self::WrongParent => "command-panel child has an incorrect parent",
+            Self::ChangedChild => "command-panel child membership or callback changed",
         })
     }
 }
@@ -167,6 +177,124 @@ where F: FnMut(usize, &mut [u8]) -> bool {
     }
     Ok(())
 }
+
+
+/// The command-panel root and its verified direct button children. These are
+/// observations for an immediate UI-thread recheck, not cached heap ownership.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Panel {
+    pub root: Target,
+    pub buttons: Vec<Target>,
+}
+
+const CHILD_READ_SIZE: usize = 0x78;
+const FIRST_CHILD_OFFSET: usize = 0x90;
+const PARENT_OFFSET: usize = 0x70;
+const CONTROL_TYPE_OFFSET: usize = 0x54;
+const MAX_PANEL_CHILDREN: usize = 64;
+
+fn control_type(bytes: &[u8]) -> u16 {
+    u16::from_le_bytes(bytes[CONTROL_TYPE_OFFSET..CONTROL_TYPE_OFFSET + 2].try_into().unwrap())
+}
+
+/// Discover only direct default-button/button controls belonging to the exact
+/// StatBtn root. SCR Control/ Dialog layouts and per-child dispatch are defined
+/// by the pinned bw_dat sources linked above. ShieldBattery's control_type_name
+/// identifies types 1 and 2 as buttons. IDs and labels are not guessed or read.
+///
+/// The traversal is bounded and acyclic, rejects incorrect parents, and checks
+/// every eligible provider against verified code or caller-owned replacements.
+/// Unsupported control types are ignored after their parent was validated.
+/// A second read checks the observed topology before returning. Callers must
+/// still recheck on the UI thread immediately before an exact callback-slot CAS.
+pub fn discover_stat_buttons<F, C>(
+    first_dialog: usize,
+    root_replacement: usize,
+    child_replacements: &[usize],
+    is_code: C,
+    mut read: F,
+) -> Result<Option<Panel>, DiscoveryError>
+where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool {
+    let Some(root) = discover_stat_button(first_dialog, root_replacement, &is_code, &mut read)? else {
+        return Ok(None);
+    };
+    if !pointer_ok(root.control, CHILD_READ_SIZE) { return Err(DiscoveryError::InvalidPointer); }
+    let mut root_header = [0; CHILD_READ_SIZE];
+    if !read(root.control, &mut root_header) { return Err(DiscoveryError::ReadFailed); }
+    if control_type(&root_header) != 0 { return Err(DiscoveryError::InvalidPanelRoot); }
+    if panel_from_bytes(root.control, &root_header, &mut read)? != Some(root) {
+        return Err(DiscoveryError::ChangedRoot);
+    }
+    let child_slot = root.control.checked_add(FIRST_CHILD_OFFSET)
+        .ok_or(DiscoveryError::InvalidPointer)?;
+    if !pointer_ok(child_slot, 8) { return Err(DiscoveryError::InvalidPointer); }
+    let mut first_child = [0; 8];
+    if !read(child_slot, &mut first_child) { return Err(DiscoveryError::ReadFailed); }
+    let mut current = word(&first_child, 0);
+    let mut seen = HashSet::new();
+    let mut observed = Vec::new();
+    let mut buttons = Vec::new();
+    while current != 0 {
+        if seen.len() >= MAX_PANEL_CHILDREN { return Err(DiscoveryError::TooManyChildren); }
+        if !pointer_ok(current, CHILD_READ_SIZE) { return Err(DiscoveryError::InvalidPointer); }
+        if current == root.control || !seen.insert(current) {
+            return Err(DiscoveryError::CyclicChildren);
+        }
+        let mut header = [0; CHILD_READ_SIZE];
+        if !read(current, &mut header) { return Err(DiscoveryError::ReadFailed); }
+        if word(&header, PARENT_OFFSET) != root.control {
+            return Err(DiscoveryError::WrongParent);
+        }
+        if matches!(control_type(&header), 1 | 2) {
+            let callback = word(&header, CALLBACK_OFFSET);
+            if callback == 0 || (!child_replacements.contains(&callback) && !is_code(callback)) {
+                return Err(DiscoveryError::UnknownCallback);
+            }
+            buttons.push(Target { control: current,
+                slot_address: current + CALLBACK_OFFSET, callback });
+        }
+        observed.push((current, header));
+        current = word(&header, 0);
+    }
+    for (address, header) in observed {
+        let mut again = [0; CHILD_READ_SIZE];
+        if !read(address, &mut again) { return Err(DiscoveryError::ReadFailed); }
+        if again != header { return Err(DiscoveryError::ChangedChild); }
+    }
+    let mut again_root = [0; CHILD_READ_SIZE];
+    let mut again_first = [0; 8];
+    if !read(root.control, &mut again_root) || !read(child_slot, &mut again_first) {
+        return Err(DiscoveryError::ReadFailed);
+    }
+    if again_root != root_header || again_first != first_child
+        || discover_stat_button(first_dialog, root_replacement, &is_code, &mut read)? != Some(root) {
+        return Err(DiscoveryError::ChangedRoot);
+    }
+    Ok(Some(Panel { root, buttons }))
+}
+
+/// Re-resolve the current root list and exact child membership/provider. Never
+/// treat a still-readable old heap address as proof that it remains a StatBtn
+/// child, and never substitute the root's callback for a child's own provider.
+pub fn recheck_stat_child<F, C>(
+    first_dialog: usize,
+    expected: Target,
+    root_replacement: usize,
+    child_replacements: &[usize],
+    is_code: C,
+    read: F,
+) -> Result<(), DiscoveryError>
+where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool {
+    if expected.slot_address != expected.control.checked_add(CALLBACK_OFFSET)
+        .ok_or(DiscoveryError::InvalidPointer)? {
+        return Err(DiscoveryError::InvalidPointer);
+    }
+    if !pointer_ok(expected.control, CHILD_READ_SIZE) { return Err(DiscoveryError::InvalidPointer); }
+    let panel = discover_stat_buttons(first_dialog, root_replacement, child_replacements, is_code, read)?;
+    if panel.as_ref().is_some_and(|panel| panel.buttons.contains(&expected)) { Ok(()) }
+    else { Err(DiscoveryError::ChangedChild) }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -326,4 +454,197 @@ mod tests {
         let bad = Target { slot_address: target.slot_address + 8, ..target };
         assert_eq!(recheck_target(bad, |at, out| f.read(at, out)), Err(DiscoveryError::InvalidPointer));
     }
+
+    const CHILD_ORIGINAL: usize = 0x60000;
+    const CHILD_REPLACEMENT: usize = 0xa0000;
+    const CHILD_REPLACEMENT_TWO: usize = 0xb0000;
+    impl Fixture {
+        fn set_word(&mut self, at: usize, field: usize, value: usize) {
+            let start = at - BASE + field;
+            self.bytes[start..start + 8].copy_from_slice(&(value as u64).to_le_bytes());
+        }
+        fn child(&mut self, at: usize, next: usize, parent: usize, ty: u16, callback: usize) {
+            self.set_word(at, 0, next);
+            self.set_word(at, CALLBACK_OFFSET, callback);
+            self.set_word(at, PARENT_OFFSET, parent);
+            let start = at - BASE + CONTROL_TYPE_OFFSET;
+            self.bytes[start..start + 2].copy_from_slice(&ty.to_le_bytes());
+        }
+        fn panel(&self, first: usize) -> Result<Option<Panel>, DiscoveryError> {
+            discover_stat_buttons(first, REPLACEMENT, &[CHILD_REPLACEMENT, CHILD_REPLACEMENT_TWO],
+                |p| matches!(p, ORIGINAL | CHILD_ORIGINAL), |at, out| self.read(at, out))
+        }
+        fn check_child(&self, first: usize, target: Target) -> Result<(), DiscoveryError> {
+            recheck_stat_child(first, target, REPLACEMENT, &[CHILD_REPLACEMENT, CHILD_REPLACEMENT_TWO],
+                |p| matches!(p, ORIGINAL | CHILD_ORIGINAL), |at, out| self.read(at, out))
+        }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn upstream_scr_dialog_layout_places_first_child_and_parent_in_verified_fields() {
+        #[repr(C)] struct Rect { left: i16, top: i16, right: i16, bottom: i16 }
+        #[repr(C)] struct Surface { width: u16, height: u16, data: *mut u8 }
+        #[repr(C)] struct BwString { data: *const u8, length: usize, capacity: usize, inline: [u8; 16] }
+        #[repr(C)] struct Control {
+            next: *mut Control, area: Rect, image: Surface, string: BwString,
+            flags: u32, flags2: u32, unknown: u16, id: i16, ty: u16, misc_u16: u16,
+            user_ptr: *mut std::ffi::c_void,
+            event: Option<unsafe extern "C" fn(*mut Control, *mut std::ffi::c_void) -> u32>,
+            draw: Option<unsafe extern "C" fn(*mut Control, i32, i32, *const Rect, *const Rect)>,
+            parent: *mut Dialog,
+        }
+        #[repr(C)] struct Dialog {
+            control: Control, surface: Surface, highlighted: *mut Control,
+            first_child: *mut Control, active: *mut Control,
+        }
+        assert_eq!(std::mem::size_of::<Control>(), CHILD_READ_SIZE);
+        assert_eq!(std::mem::offset_of!(Control, event), CALLBACK_OFFSET);
+        assert_eq!(std::mem::offset_of!(Control, parent), PARENT_OFFSET);
+        assert_eq!(std::mem::offset_of!(Control, ty), CONTROL_TYPE_OFFSET);
+        assert_eq!(std::mem::offset_of!(Dialog, first_child), FIRST_CHILD_OFFSET);
+    }
+
+    #[test]
+    fn command_children_can_bypass_root_and_keep_separate_verified_providers() {
+        let mut f = Fixture::new();
+        f.root(BASE, BASE + 0x100, b"StatData", ORIGINAL);
+        f.root(BASE + 0x100, BASE + 0x200, b"StatBtn", REPLACEMENT);
+        f.root(BASE + 0x200, 0, b"Minimap", ORIGINAL);
+        f.set_word(BASE + 0x100, FIRST_CHILD_OFFSET, BASE + 0x400);
+        f.child(BASE + 0x400, BASE + 0x500, BASE + 0x100, 1, CHILD_ORIGINAL);
+        f.child(BASE + 0x500, BASE + 0x600, BASE + 0x100, 2, ORIGINAL);
+        f.child(BASE + 0x600, 0, BASE + 0x100, 9, 0); // A label is not a button.
+        // Eligible child labels need not be strings; no child name is followed.
+        f.set_word(BASE + 0x400, STRING_DATA_OFFSET, 1);
+        f.set_word(BASE + 0x400, STRING_LENGTH_OFFSET, usize::MAX);
+        let panel = f.panel(BASE).unwrap().unwrap();
+        assert_eq!(panel.root.control, BASE + 0x100);
+        assert_eq!(panel.root.callback, REPLACEMENT);
+        assert_eq!(panel.buttons, [
+            Target { control: BASE + 0x400, slot_address: BASE + 0x460, callback: CHILD_ORIGINAL },
+            Target { control: BASE + 0x500, slot_address: BASE + 0x560, callback: ORIGINAL },
+        ]);
+        for target in panel.buttons { assert!(f.check_child(BASE, target).is_ok()); }
+        assert_eq!(f.panel(0), Ok(None));
+    }
+
+    #[test]
+    fn known_child_wrappers_are_accepted_but_null_or_unverified_providers_are_rejected() {
+        for callback in [ORIGINAL, CHILD_ORIGINAL, CHILD_REPLACEMENT, CHILD_REPLACEMENT_TWO] {
+            let mut f = Fixture::new(); f.root(BASE, 0, b"StatBtn", ORIGINAL);
+            f.set_word(BASE, FIRST_CHILD_OFFSET, BASE + 0x400);
+            f.child(BASE + 0x400, 0, BASE, 2, callback);
+            assert_eq!(f.panel(BASE).unwrap().unwrap().buttons[0].callback, callback);
+        }
+        for callback in [0, 0x123456, REPLACEMENT] {
+            let mut f = Fixture::new(); f.root(BASE, 0, b"StatBtn", ORIGINAL);
+            f.set_word(BASE, FIRST_CHILD_OFFSET, BASE + 0x400);
+            f.child(BASE + 0x400, 0, BASE, 2, callback);
+            assert_eq!(f.panel(BASE), Err(DiscoveryError::UnknownCallback));
+        }
+    }
+
+    #[test]
+    fn child_cycles_bad_parent_and_non_dialog_statbtn_root_are_rejected() {
+        let mut f = Fixture::new(); f.root(BASE, 0, b"StatBtn", ORIGINAL);
+        f.set_word(BASE, FIRST_CHILD_OFFSET, BASE + 0x400);
+        f.child(BASE + 0x400, BASE + 0x500, BASE, 2, CHILD_ORIGINAL);
+        f.child(BASE + 0x500, BASE + 0x400, BASE, 2, CHILD_ORIGINAL);
+        assert_eq!(f.panel(BASE), Err(DiscoveryError::CyclicChildren));
+        f.set_word(BASE + 0x500, 0, 0);
+        f.set_word(BASE + 0x500, PARENT_OFFSET, BASE + 0x200);
+        assert_eq!(f.panel(BASE), Err(DiscoveryError::WrongParent));
+        f.child(BASE + 0x500, 0, BASE + 0x200, 9, 0);
+        assert_eq!(f.panel(BASE), Err(DiscoveryError::WrongParent)); // Even ignored controls need correct parents.
+        f.child(BASE + 0x500, 0, BASE, 9, 0);
+        let ty = CONTROL_TYPE_OFFSET;
+        f.bytes[ty..ty + 2].copy_from_slice(&2u16.to_le_bytes());
+        assert_eq!(f.panel(BASE), Err(DiscoveryError::InvalidPanelRoot));
+        f.bytes[ty..ty + 2].fill(0);
+        f.set_word(BASE, FIRST_CHILD_OFFSET, BASE);
+        assert_eq!(f.panel(BASE), Err(DiscoveryError::CyclicChildren));
+    }
+
+    #[test]
+    fn child_traversal_has_exact_count_pointer_and_read_bounds() {
+        let mut f = Fixture::new(); f.root(BASE, 0, b"StatBtn", ORIGINAL);
+        f.set_word(BASE, FIRST_CHILD_OFFSET, BASE + 0x400);
+        for index in 0..MAX_PANEL_CHILDREN {
+            let child = BASE + 0x400 + index * 0x100;
+            let next = if index + 1 == MAX_PANEL_CHILDREN { 0 } else { child + 0x100 };
+            f.child(child, next, BASE, 2, CHILD_ORIGINAL);
+        }
+        assert_eq!(f.panel(BASE).unwrap().unwrap().buttons.len(), MAX_PANEL_CHILDREN);
+        f.set_word(BASE + 0x400 + (MAX_PANEL_CHILDREN - 1) * 0x100, 0,
+            BASE + 0x400 + MAX_PANEL_CHILDREN * 0x100);
+        assert_eq!(f.panel(BASE), Err(DiscoveryError::TooManyChildren));
+        for pointer in [1, BASE + 1, usize::MAX - 7] {
+            f.set_word(BASE, FIRST_CHILD_OFFSET, pointer);
+            assert_eq!(f.panel(BASE), Err(DiscoveryError::InvalidPointer));
+        }
+        f.set_word(BASE, FIRST_CHILD_OFFSET, BASE + f.bytes.len());
+        assert_eq!(f.panel(BASE), Err(DiscoveryError::ReadFailed));
+    }
+
+    #[test]
+    fn child_recheck_requires_exact_current_membership_callback_type_and_slot() {
+        let mut f = Fixture::new(); f.root(BASE, 0, b"StatBtn", ORIGINAL);
+        f.set_word(BASE, FIRST_CHILD_OFFSET, BASE + 0x400);
+        f.child(BASE + 0x400, 0, BASE, 2, CHILD_ORIGINAL);
+        let target = f.panel(BASE).unwrap().unwrap().buttons[0];
+        assert!(f.check_child(BASE, target).is_ok());
+        assert_eq!(f.check_child(BASE, Target { slot_address: target.slot_address + 8, ..target }),
+            Err(DiscoveryError::InvalidPointer));
+        f.set_word(BASE + 0x400, CALLBACK_OFFSET, ORIGINAL);
+        assert_eq!(f.check_child(BASE, target), Err(DiscoveryError::ChangedChild));
+        f.child(BASE + 0x400, 0, BASE, 9, CHILD_ORIGINAL);
+        assert_eq!(f.check_child(BASE, target), Err(DiscoveryError::ChangedChild));
+        f.child(BASE + 0x400, 0, BASE, 2, CHILD_ORIGINAL);
+        f.set_word(BASE, FIRST_CHILD_OFFSET, 0);
+        assert_eq!(f.check_child(BASE, target), Err(DiscoveryError::ChangedChild));
+        assert_eq!(f.check_child(0, target), Err(DiscoveryError::ChangedChild));
+    }
+
+    #[test]
+    fn next_match_recreated_statbtn_uses_new_direct_children_without_reusing_old_membership() {
+        let mut f = Fixture::new(); f.root(BASE, 0, b"StatBtn", ORIGINAL);
+        f.set_word(BASE, FIRST_CHILD_OFFSET, BASE + 0x400);
+        f.child(BASE + 0x400, 0, BASE, 2, CHILD_ORIGINAL);
+        let old = f.panel(BASE).unwrap().unwrap().buttons[0];
+        f.root(BASE + 0x100, 0, b"StatBtn", REPLACEMENT);
+        f.set_word(BASE + 0x100, FIRST_CHILD_OFFSET, BASE + 0x800);
+        f.child(BASE + 0x800, 0, BASE + 0x100, 1, CHILD_REPLACEMENT);
+        let new = f.panel(BASE + 0x100).unwrap().unwrap().buttons[0];
+        assert_ne!(new.control, old.control);
+        assert_eq!(f.check_child(BASE + 0x100, old), Err(DiscoveryError::ChangedChild));
+        assert!(f.check_child(BASE + 0x100, new).is_ok());
+        // The old object remains readable; readability alone never permits use.
+        let mut bytes = [0; CHILD_READ_SIZE];
+        assert!(f.read(old.control, &mut bytes));
+    }
+
+    #[test]
+    fn child_topology_or_provider_changing_during_discovery_is_not_returned_as_stable() {
+        use std::cell::RefCell;
+        for change_parent in [false, true] {
+            let mut f = Fixture::new(); f.root(BASE, 0, b"StatBtn", ORIGINAL);
+            f.set_word(BASE, FIRST_CHILD_OFFSET, BASE + 0x400);
+            f.child(BASE + 0x400, BASE + 0x500, BASE, 2, CHILD_ORIGINAL);
+            f.child(BASE + 0x500, 0, BASE, 2, CHILD_ORIGINAL);
+            let f = RefCell::new(f);
+            let result = discover_stat_buttons(BASE, REPLACEMENT, &[CHILD_REPLACEMENT],
+                |p| matches!(p, ORIGINAL | CHILD_ORIGINAL), |at, out| {
+                    let success = f.borrow().read(at, out);
+                    if at == BASE + 0x500 && out.len() == CHILD_READ_SIZE {
+                        f.borrow_mut().set_word(BASE + 0x400,
+                            if change_parent { PARENT_OFFSET } else { CALLBACK_OFFSET },
+                            if change_parent { BASE + 0x100 } else { ORIGINAL });
+                    }
+                    success
+                });
+            assert_eq!(result, Err(DiscoveryError::ChangedChild));
+        }
+    }
+
 }

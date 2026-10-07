@@ -852,3 +852,253 @@ fn previous_panel_keyboard_and_mouse_inputs_keep_exact_control_observation() {
         assert_eq!(fixture.borrow().globals[9], command.len());
     }
 }
+// Child buttons can dispatch activation directly. These regressions use the
+// production observer rather than substituting a parent-panel observation.
+#[test]
+fn direct_child_activation_observes_train_once_without_any_parent_event() {
+    use std::cell::{Cell, RefCell};
+    let mut f = Fixture::new(4, 3, 111); f.metadata(111, 1, 0x22);
+    let runtime = f.runtime(); let selection = *f.selection;
+    let state = RefCell::new(building_state(&f, 111)); let fixture = RefCell::new(f);
+    let command = train_packet(0); let original_calls = Cell::new(0);
+    assert!(!crate::control_capture::active());
+    let result = observe_panel_call(Some(0xe), Some(2), true,
+        || Some(capture_owned_callback(&fixture.borrow(), &runtime, &state.borrow())),
+        || {
+            assert!(crate::control_capture::active());
+            original_calls.set(original_calls.get() + 1);
+            append_owned_callback(&mut fixture.borrow_mut(), &command);
+            0x7654_3210
+        },
+        |capture| {
+            assert!(crate::control_capture::active());
+            complete_captured_control(&runtime, &mut state.borrow_mut(), capture.unwrap(), false, 7);
+        });
+    assert_eq!(result, 0x7654_3210); assert_eq!(original_calls.get(), 1);
+    assert!(!crate::control_capture::active());
+    let state = state.borrow();
+    assert!(state.active, "{}", state.message); assert_eq!(state.pending.len(), 3);
+    assert_eq!(state.sent, 0);
+    for (index, job) in state.pending.iter().enumerate() {
+        assert_eq!(job.ids, ids(&[index as u32 + 1], 1, 13));
+        assert_eq!(job.restore, ids(&[0], 1, 13)); assert_eq!(job.command, command);
+    }
+    assert_eq!(*fixture.borrow().selection, selection);
+    assert_eq!(fixture.borrow().globals[9], command.len());
+    assert_eq!(&fixture.borrow().outgoing_buffer[..command.len()], command.as_slice());
+}
+
+#[test]
+fn admitted_raw_parent_capture_automatically_suppresses_admitted_child_capture() {
+    use std::cell::RefCell;
+    let mut f = Fixture::new(4, 4, 111); f.metadata(111, 1, 0x22);
+    let runtime = f.runtime(); let selection = *f.selection;
+    let state = RefCell::new(building_state(&f, 111)); let fixture = RefCell::new(f);
+    let order = RefCell::new(Vec::new()); let command = train_packet(0);
+    let result = observe_panel_call(Some(5), None, true,
+        || {
+            order.borrow_mut().push("parent-begin");
+            Some(capture_owned_callback(&fixture.borrow(), &runtime, &state.borrow()))
+        },
+        || {
+            order.borrow_mut().push("parent-original");
+            assert!(crate::control_capture::active());
+            let child = observe_panel_call::<Capture>(Some(0xe), Some(2), true,
+                || panic!("an admitted child must not overlap its parent capture"),
+                || {
+                    order.borrow_mut().push("child-original");
+                    append_owned_callback(&mut fixture.borrow_mut(), &command);
+                    0x2468
+                },
+                |capture| {
+                    assert!(capture.is_none());
+                    order.borrow_mut().push("child-finish-none");
+                });
+            assert_eq!(child, 0x2468);
+            0x1357
+        },
+        |capture| {
+            order.borrow_mut().push("parent-finish");
+            assert!(crate::control_capture::active());
+            complete_captured_control(&runtime, &mut state.borrow_mut(), capture.unwrap(), false, 7);
+        });
+    assert_eq!(result, 0x1357);
+    assert_eq!(order.into_inner(), ["parent-begin", "parent-original", "child-original",
+        "child-finish-none", "parent-finish"]);
+    assert!(!crate::control_capture::active());
+    assert!(state.borrow().active); assert_eq!(state.borrow().pending.len(), 3);
+    assert!(state.borrow().pending.iter().all(|job| job.command == command
+        && !job.ids.contains(&job.restore[0])));
+    assert_eq!(fixture.borrow().globals[9], command.len());
+    assert_eq!(*fixture.borrow().selection, selection);
+}
+
+#[test]
+fn ignored_root_notification_allows_its_child_activation_to_capture_production() {
+    use std::cell::RefCell;
+    let mut f = Fixture::new(4, 6, 111); f.metadata(111, 1, 0x22);
+    let runtime = f.runtime(); let selection = *f.selection;
+    let state = RefCell::new(building_state(&f, 111)); let fixture = RefCell::new(f);
+    let order = RefCell::new(Vec::new()); let command = train_packet(0);
+    let result = observe_panel_call::<Capture>(Some(0xe), Some(0), true,
+        || panic!("root notification must not start capture"),
+        || {
+            order.borrow_mut().push("root-original");
+            assert!(!crate::control_capture::active());
+            assert_eq!(run_owned_panel_event(&fixture, &runtime, &state,
+                Some(0xe), Some(2), true, &command, &order), 0x1357_2468);
+            assert!(!crate::control_capture::active());
+            0x4321
+        },
+        |capture| {
+            assert!(capture.is_none()); order.borrow_mut().push("root-finish-none");
+        });
+    assert_eq!(result, 0x4321);
+    assert_eq!(order.into_inner(), ["root-original", "begin", "original", "finish", "root-finish-none"]);
+    assert!(state.borrow().active); assert_eq!(state.borrow().pending.len(), 3);
+    assert!(state.borrow().pending.iter().all(|job| job.command == command));
+    assert_eq!(fixture.borrow().globals[9], command.len());
+    assert_eq!(*fixture.borrow().selection, selection);
+    assert!(!crate::control_capture::active());
+}
+
+#[test]
+fn parent_without_snapshot_does_not_claim_capture_lease_from_child_activation() {
+    use std::cell::RefCell;
+    let mut f = Fixture::new(4, 7, 111); f.metadata(111, 1, 0x22);
+    let runtime = f.runtime(); let selection = *f.selection;
+    let state = RefCell::new(building_state(&f, 111)); let fixture = RefCell::new(f);
+    let order = RefCell::new(Vec::new()); let command = train_packet(0);
+    let result = observe_panel_call::<Capture>(Some(5), None, true,
+        || {
+            order.borrow_mut().push("parent-begin-none");
+            None
+        },
+        || {
+            order.borrow_mut().push("parent-original");
+            assert!(!crate::control_capture::active());
+            assert_eq!(run_owned_panel_event(&fixture, &runtime, &state,
+                Some(0xe), Some(2), true, &command, &order), 0x1357_2468);
+            0x5678
+        },
+        |capture| {
+            assert!(capture.is_none()); order.borrow_mut().push("parent-finish-none");
+        });
+    assert_eq!(result, 0x5678);
+    assert_eq!(order.into_inner(), ["parent-begin-none", "parent-original", "begin", "original",
+        "finish", "parent-finish-none"]);
+    assert!(state.borrow().active); assert_eq!(state.borrow().pending.len(), 3);
+    assert!(state.borrow().pending.iter().all(|job| job.command == command));
+    assert_eq!(fixture.borrow().globals[9], command.len());
+    assert_eq!(*fixture.borrow().selection, selection);
+    assert!(!crate::control_capture::active());
+}
+
+#[test]
+fn capture_lease_survives_finish_and_prevents_dispatch_descendant_from_recopying_train() {
+    use std::cell::{Cell, RefCell};
+    let mut f = Fixture::new(4, 2, 111); f.metadata(111, 1, 0x22);
+    let runtime = f.runtime(); let selection = *f.selection;
+    let state = RefCell::new(building_state(&f, 111)); let fixture = RefCell::new(f);
+    let command = train_packet(0); let original_calls = Cell::new(0); let dispatch_calls = Cell::new(0);
+    let result = observe_panel_call(Some(0xe), Some(2), true,
+        || Some(capture_owned_callback(&fixture.borrow(), &runtime, &state.borrow())),
+        || {
+            original_calls.set(original_calls.get() + 1);
+            append_owned_callback(&mut fixture.borrow_mut(), &command);
+            0x1122
+        },
+        |capture| {
+            assert!(crate::control_capture::active());
+            complete_captured_control(&runtime, &mut state.borrow_mut(), capture.unwrap(), false, 7);
+            assert_eq!(state.borrow().pending.len(), 3);
+            // Model an engine callback reached while the finish closure drains
+            // pending output. Its real original still runs once, without a
+            // second observer treating the generated output as user input.
+            let nested = observe_panel_call::<Capture>(Some(0xe), Some(2), true,
+                || panic!("finish dispatch must not start another observation"),
+                || {
+                    assert!(crate::control_capture::active());
+                    dispatch_calls.set(dispatch_calls.get() + 1);
+                    append_owned_callback(&mut fixture.borrow_mut(), &command);
+                    0x3344
+                },
+                |capture| assert!(capture.is_none()));
+            assert_eq!(nested, 0x3344); assert_eq!(state.borrow().pending.len(), 3);
+        });
+    assert_eq!(result, 0x1122); assert_eq!(original_calls.get(), 1); assert_eq!(dispatch_calls.get(), 1);
+    assert!(!crate::control_capture::active());
+    assert!(state.borrow().active); assert_eq!(state.borrow().pending.len(), 3);
+    assert!(state.borrow().pending.iter().all(|job| job.command == command));
+    assert_eq!(fixture.borrow().globals[9], command.len() * 2);
+    assert_eq!(&fixture.borrow().outgoing_buffer[..6], [command.clone(), command].concat().as_slice());
+    assert_eq!(*fixture.borrow().selection, selection);
+}
+
+#[test]
+fn command_child_providers_keep_separate_immutable_originals_for_recreated_controls() {
+    let originals = [AtomicUsize::new(0), AtomicUsize::new(0)];
+    let replacements = [0x90000, 0x91000];
+    assert_eq!(choose_panel_child_provider(0x50000, &originals, &replacements), Ok((0, 0x50000)));
+    assert_eq!(choose_panel_child_provider(0x60000, &originals, &replacements), Ok((1, 0x60000)));
+    for _ in 0..3 {
+        assert_eq!(choose_panel_child_provider(0x50000, &originals, &replacements), Ok((0, 0x50000)));
+        assert_eq!(choose_panel_child_provider(0x91000, &originals, &replacements), Ok((1, 0x60000)));
+    }
+    // A new child object has its own native provider, even if the old command
+    // panel is gone. No heap-control address is involved in original dispatch.
+    let first = AtomicUsize::new(0x50000);
+    let next_game = AtomicUsize::new(0x60000);
+    for (entry, callback) in [(&first, 0x50000), (&next_game, 0x60000)] {
+        let (index, original) = choose_panel_child_provider(callback, &originals, &replacements).unwrap();
+        let slot = crate::callback_binding::Slot {address:entry as *const AtomicUsize as usize,
+            original, replacement:replacements[index]};
+        unsafe { crate::callback_binding::maintain(&[slot]) }.unwrap();
+        unsafe { crate::callback_binding::maintain(&[slot]) }.unwrap(); // Existing wrapper is valid.
+        assert_eq!(entry.load(Ordering::Acquire), replacements[index]);
+        assert_eq!(choose_panel_child_provider(entry.load(Ordering::Acquire), &originals, &replacements),
+            Ok((index, callback)));
+    }
+    assert_eq!(originals[0].load(Ordering::Acquire), 0x50000);
+    assert_eq!(originals[1].load(Ordering::Acquire), 0x60000);
+    assert!(choose_panel_child_provider(0x70000, &originals, &replacements).is_err());
+    assert_eq!(originals[0].load(Ordering::Acquire), 0x50000);
+    assert_eq!(originals[1].load(Ordering::Acquire), 0x60000);
+}
+
+#[test]
+fn command_child_provider_rejects_missing_original_and_never_overwrites_another_callback() {
+    let originals = [AtomicUsize::new(0), AtomicUsize::new(0)];
+    let replacements = [0x90000, 0x91000];
+    assert!(choose_panel_child_provider(replacements[0], &originals, &replacements).is_err());
+    assert!(choose_panel_child_provider(0, &originals, &replacements).is_err());
+    assert!(choose_panel_child_provider(0x50000, &originals, &replacements[..1]).is_err());
+    assert!(originals.iter().all(|entry|entry.load(Ordering::Acquire) == 0));
+    let (index, original) = choose_panel_child_provider(0x50000, &originals, &replacements).unwrap();
+    let entry = AtomicUsize::new(0x70000);
+    let slot = crate::callback_binding::Slot {address:&entry as *const AtomicUsize as usize,
+        original, replacement:replacements[index]};
+    assert!(unsafe { crate::callback_binding::maintain(&[slot]) }.is_err());
+    assert_eq!(entry.load(Ordering::Acquire), 0x70000);
+    assert_eq!(originals[index].load(Ordering::Acquire), 0x50000);
+}
+
+#[test]
+fn delegated_raw_child_event_preserves_outer_train_but_new_input_revokes_it() {
+    for (kind, same, keep) in [(Some(5),true,true), (Some(5),false,false), (Some(0xe),false,true)] {
+        let mut f = Fixture::new(4, 3, 111); f.metadata(111, 1, 0x22);
+        let runtime = f.runtime(); let mut state = building_state(&f,111);
+        let capture = capture_owned_callback(&f,&runtime,&state);
+        let original_event = Box::new([0usize;4]); let next_event = Box::new([1usize;4]);
+        let original_pointer = original_event.as_ptr() as usize;
+        let _scope = crate::control_capture::EventScope::enter(original_pointer);
+        let _lease = crate::control_capture::Lease::enter();
+        append_owned_callback(&mut f,&train_packet(0));
+        let nested_changed = panel_nested_input_changed(kind,
+            if same {original_pointer} else {next_event.as_ptr() as usize});
+        complete_captured_control(&runtime,&mut state,capture,nested_changed,7);
+        assert_eq!(state.active,keep,"kind={kind:?}, same={same}: {}",state.message);
+        assert_eq!(state.pending.len(),if keep {3} else {0});
+        assert_eq!(f.globals[9],3); assert_eq!(f.selection[0],f.pointer(0));
+    }
+}
