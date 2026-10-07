@@ -304,6 +304,57 @@ mod tests {
     }
 
     #[test]
+    fn every_local_game_slot_reads_its_own_row_with_reordered_network_players() {
+        for owner in 0..PLAYABLE_SLOTS as u8 {
+            let (mut game, mut roster) = fixture();
+            let computer = (owner + 1) % PLAYABLE_SLOTS as u8;
+            for slot in 0..PLAYABLE_SLOTS {
+                let start = slot * PLAYER_SIZE;
+                // Reorder every human's network ID relative to its game slot.
+                let storm_id = if slot == computer as usize { u32::MAX }
+                    else { ((slot + 1) % PLAYABLE_SLOTS) as u32 };
+                roster[start + 4..start + 8].copy_from_slice(&storm_id.to_le_bytes());
+                roster[start + 8] = if slot == computer as usize { COMPUTER } else { HUMAN };
+                let row = ALLIANCES_OFFSET + slot * ALLIANCE_SLOTS;
+                // Distinct valid rows detect use of network/host identity.
+                let values = std::array::from_fn::<_, ALLIANCE_SLOTS, _>(|column| {
+                    ((slot >> (column % 3)) & 1) as u8
+                });
+                game[row..row + ALLIANCE_SLOTS].copy_from_slice(&values);
+            }
+            let row = ALLIANCES_OFFSET + owner as usize * ALLIANCE_SLOTS;
+            game[row + owner as usize] = 1;
+            let untouched = game.clone();
+            let mut calls = Vec::new();
+            let value = read_snapshot(GAME, PLAYERS, owner, |address, out| {
+                calls.push((address, out.len()));
+                let source = if address == PLAYERS { &roster[..] }
+                    else { &game[address - GAME..address - GAME + out.len()] };
+                out.copy_from_slice(source);
+                true
+            }).unwrap();
+            assert_eq!(calls, vec![(PLAYERS, PLAYER_SIZE * PLAYABLE_SLOTS),
+                (GAME + row, ALLIANCE_SLOTS)], "owner={owner}");
+            assert_eq!(value.owner, owner);
+            assert_eq!(value.players[owner as usize].storm_id,
+                u32::from((owner + 1) % PLAYABLE_SLOTS as u8));
+            assert_eq!(value.alliance_row, game[row..row + ALLIANCE_SLOTS]);
+            assert!(value.has_alliance_targets());
+            assert_eq!(value.other_human_count(), PLAYABLE_SLOTS - 2);
+            assert_eq!(value.active_computer_count(), 1);
+            let before = value.command().unwrap();
+            let after = merge_toggle(&before, &value, computer, true).unwrap();
+            assert_eq!(relation(&after, computer as usize),
+                relation(&before, computer as usize).max(1));
+            for slot in 0..ALLIANCE_SLOTS {
+                if slot != computer as usize {
+                    assert_eq!(relation(&after, slot), relation(&before, slot));
+                }
+            }
+            assert_eq!(game, untouched);
+        }
+    }
+    #[test]
     fn rejects_rescue_neutral_lobby_defeated_observer_and_inactive_controllers() {
         let (game, mut roster) = fixture();
         for controller in [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 255] {

@@ -103,7 +103,10 @@ struct Runtime {
     selection: Value,
     local: Value,
     replay: Value,
-    live: Value,
+    main_state: Value,
+    // The color-command handler's lobby branch can reflect host authority.
+    // Retain it only as optional diagnostics; it does not prove a started match.
+    lobby_color_gate: Option<Value>,
     continuing: Value,
     paused: Value,
     frame: Value,
@@ -388,9 +391,12 @@ impl Runtime {
     fn context(&self) -> Option<(bool, u32, u8)> {
         let frame = u32::try_from(self.frame.read()?).ok()?;
         let owner = u8::try_from(self.local.read()?).ok()?;
+        // Pinned samase_scarf GameInit proves scmain_state switch case 3 calls
+        // game_loop, while case 4 calls run_menus. This gate is independent of
+        // lobby host authority and excludes stale loop/frame values in menus.
         let active = self.replay.read()? == 0
-            && self.live.read()? != 0
-            && self.continuing.read()? != 0
+            && self.main_state.read()? == 3
+            && self.continuing.read()? == 1
             && owner < 8;
         Some((active, frame, owner))
     }
@@ -1057,7 +1063,7 @@ struct Capture {
 fn session_identity(runtime: &Runtime) -> Option<[usize; 3]> {
     Some([
         runtime.replay.read()?,
-        runtime.live.read()?,
+        runtime.main_state.read()?,
         runtime.continuing.read()?,
     ])
 }
@@ -1388,10 +1394,14 @@ fn poll_registration() -> Result<RegistrationPoll, String> {
         .collect::<Vec<_>>()
         .join(",");
     let detail = format!(
-        "table_rva=0x{table_rva:x}; frame={}; live={}; owner={}; slots[0,4,7,13]=[{values}]",
+        "table_rva=0x{table_rva:x}; frame={}; live={}; owner={}; main_state={}; continuing={}; replay={}; lobby_color_gate={}; slots[0,4,7,13]=[{values}]",
         context.1,
         u8::from(context.0),
-        context.2
+        context.2,
+        runtime.main_state.read().map_or(-1, |n| n as i64),
+        runtime.continuing.read().map_or(-1, |n| n as i64),
+        runtime.replay.read().map_or(-1, |n| n as i64),
+        runtime.lobby_color_gate.as_ref().and_then(Value::read).map_or(-1, |n| n as i64)
     );
     let outcome = crate::callback_startup::attempt(&observed, || unsafe {
         crate::callback_binding::maintain_report(slots)
@@ -1411,7 +1421,7 @@ fn poll_registration() -> Result<RegistrationPoll, String> {
             CALLBACKS_READY.store(true, Ordering::Release);
             set_init_phase(
                 InitPhase::Ready,
-                "Game session connection ready; reconnect fix 20261007; live validation pending"
+                "Game session connection ready; nonhost fix 20261007; live validation pending"
                     .into(),
             );
             set_init_diagnostic(format!("READY; changed={}; {detail}", changed.len()));
@@ -1672,7 +1682,8 @@ fn analyze(binary: &BinaryFile<VirtualAddress64>, base: usize) -> Result<Resolve
         selection: value(a.client_selection(), "client_selection")?,
         local: value(a.local_player_id(), "local_player_id")?,
         replay: value(a.is_replay(), "is_replay")?,
-        live: value(a.in_lobby_or_game(), "in_lobby_or_game")?,
+        main_state: value(a.scmain_state(), "scmain_state")?,
+        lobby_color_gate: value(a.in_lobby_or_game(), "lobby color command gate").ok(),
         continuing: value(a.continue_game_loop(), "continue_game_loop")?,
         paused: value(a.is_paused(), "is_paused")?,
         frame: value(a.game_frame_count(), "frame")?,

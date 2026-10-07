@@ -1,15 +1,13 @@
 # 검증 기록 구분
 
-루트 실행 파일, `STATUS.json`, `TEST-REPORT.md`, 기존 검사 로그 및 소스 대조 JSON은 `game-session-reconnect-fix-20261007` 배포본의 기록입니다. 해당 배포본은 native 361개 + managed 374개 = 735개를 통과했습니다. 소스 대조 JSON은 그때 빌드한 원본 배포 소스에 대한 해시입니다.
+현재 native 배포본은 `nonhost-control-fix-20261007`입니다. `nonhost-native-tests.log`는 전체 공개 native 자체 검사 363개 통과·외부 이미지 2개 미실행 기록입니다. `nonhost-source-build-match.json`은 이번 빌드의 Rust 25개와 Cargo/build 입력 3개가 첨부 소스와 일치함을 기록합니다.
 
-공개 소스에서는 다음 원본 자료와 그 자료를 포함하던 검사만 제외했습니다. 런타임 기능 코드는 변경하지 않았습니다.
+`nonhost-managed-tests.log`는 이번에 다시 실행한 관리 검사 177 + 79 + 118 = 374개 기록입니다. 현재 자체 검사 합계는 737개입니다. 루트 `STATUS.json`과 `TEST-REPORT.md`는 이번 수정본에 대응합니다. 실제 비방장 게임 검증은 아직 남아 있습니다.
 
-- 설치 게임에서 가져온 `installed-units.dat`와 직접 DAT 대조 검사 2개.
-- upstream 전체 복사 `upstream-struct-layouts.rs`와 그 파일 대조 검사 1개.
-- 로컬 설치 파일 경로를 담은 `original-files-verified.json`.
+그 밖의 기존 로그, `public-native-tests.log`, `native-source-build-match.json`, `managed-source-build-match.json`, `game-session-reconnect-report-20261007.md`, `game-session-reconnect-status-20261007.json`은 직전 재연결 배포본의 과거 기록입니다. 과거 원본 배포 검사 수는 native 361 + managed 374 = 735개이고, 당시 공개 소스는 외부 자료 검사 3개를 제외해 native 358 + managed 374 = 732개였습니다. 과거 보고서의 실게임 미검증 표기는 작성 당시 상태입니다. 이후 사용자가 두 판 연속 정상 유지를 확인했습니다.
 
-일반 자체 데이터·메모리·파일 검사는 유지했습니다. 공개 소스 재검사 결과는 `public-native-tests.log`에 있습니다: native 358개 통과, 외부 이미지 검사 2개 미실행. 관리 소스와 해당 검사 자료는 배포본과 같으며 177 + 79 + 118 = 374개가 통과했습니다. 따라서 공개 소스 검사 합계는 732개입니다.
+공개 소스에는 설치 게임의 `installed-units.dat`, upstream 전체 복사 `upstream-struct-layouts.rs`, 이를 직접 포함하던 검사 3개, 로컬 설치 경로가 담긴 원본 검사 JSON을 포함하지 않습니다. 일반 자체 배열·메모리·파일 검사는 유지하며 현재 DLL은 이번 공개 소스로 빌드했습니다.
 
-`native-source-build-match.json`은 기존 배포 기록이므로 공개 소스에서 검사 자료만 제거한 `building_commands.rs`, `runtime_tests.rs`의 전체 파일 해시와는 다릅니다. 포함된 DLL은 직전 검증된 배포 DLL을 보존합니다.
+관리 실행 파일, 커넥터, 로비 DLL, bootstrap은 기존 배포 바이트 그대로입니다. 각 실행 파일 해시는 루트 `artifact-manifest.json`에 있습니다. bootstrap과 SHA256 파일은 Git에서 바이트를 변환하지 않습니다. 실행 로그와 게임 원본은 배포하지 않습니다.
 
-소스의 로비 모듈과 커넥터도 배포된 바이너리에 대응하는 작성본을 확인해 포함했습니다. 새 `build.ps1`은 로컬 도구의 개인 경로 대신 표준 C# 컴파일러와 PATH의 GCC/Rust 도구를 사용합니다. 빌드와 공개 검사에서는 게임 실행·연결·입력을 수행하지 않습니다.
+`verification/AllianceTests.cs`는 별도 관리 모델 검사이며 production Native 대신 fixture stub을 사용합니다. AllianceSnapshot.cs와 AllianceOverlayForm.cs를 함께 x64, warnaserror, Drawing/Forms 참조로 컴파일합니다. 일반 관리 검사 스크립트와 별도로 118개를 검사합니다.

@@ -35,7 +35,7 @@ struct DatHeader { data: usize, width: u32, entries: u32 }
 struct Fixture {
     units: Box<[u8]>,
     selection: Box<[usize; 12]>,
-    globals: Box<[usize; 12]>,
+    globals: Box<[usize; 13]>,
     outgoing_buffer: Box<[u8; 512]>,
     dat: Box<[DatHeader; 45]>,
     dat_flags: Box<[u32; 228]>,
@@ -48,7 +48,7 @@ impl Fixture {
         let mut this = Self {
             units: vec![0; count * UNIT_SIZE].into_boxed_slice(),
             selection: Box::new([0; 12]),
-            globals: Box::new([0; 12]),
+            globals: Box::new([0; 13]),
             outgoing_buffer: Box::new([0; 512]),
             dat: Box::new([DatHeader {data:0,width:0,entries:0};45]),
             dat_flags: Box::new([0;228]),
@@ -74,7 +74,7 @@ impl Fixture {
         this.globals[2] = this.selection.as_ptr() as usize;
         this.globals[3] = owner as usize;
         this.globals[4] = 0; // replay
-        this.globals[5] = 1; // live
+        this.globals[5] = 3; // scmain_state case 3 calls game_loop
         this.globals[6] = 1; // continuing
         this.globals[7] = 0; // paused
         this.globals[8] = 100; // frame
@@ -131,7 +131,8 @@ impl Fixture {
             selection: Value::from_operand(selection_address, 0, 0, 0, 0).unwrap(),
             local: self.operand(3),
             replay: self.operand(4),
-            live: self.operand(5),
+            main_state: self.operand(5),
+            lobby_color_gate: Some(self.operand(12)),
             continuing: self.operand(6),
             paused: self.operand(7),
             frame: self.operand(8),
@@ -205,11 +206,11 @@ fn same_game_observation_does_not_repeatedly_clear_newly_activated_group() {
 #[test]
 fn coherent_session_reads_owned_menu_and_next_match_flags_each_time() {
     let mut f=Fixture::new(3,7,37);let r=f.runtime();
-    assert_eq!(coherent_session_context(&r),Some(crate::game_session::Context{active:true,frame:100,owner:7,identity:[0,1,1]}));
-    f.globals[5]=0;f.globals[6]=0;f.globals[8]=0;f.globals[3]=8;
-    assert_eq!(coherent_session_context(&r),Some(crate::game_session::Context{active:false,frame:0,owner:8,identity:[0,0,0]}));
-    f.globals[5]=1;f.globals[6]=1;f.globals[8]=1;f.globals[3]=7;
-    assert_eq!(coherent_session_context(&r),Some(crate::game_session::Context{active:true,frame:1,owner:7,identity:[0,1,1]}));
+    assert_eq!(coherent_session_context(&r),Some(crate::game_session::Context{active:true,frame:100,owner:7,identity:[0,3,1]}));
+    f.globals[5]=4;f.globals[6]=0;f.globals[8]=0;f.globals[3]=8;
+    assert_eq!(coherent_session_context(&r),Some(crate::game_session::Context{active:false,frame:0,owner:8,identity:[0,4,0]}));
+    f.globals[5]=3;f.globals[6]=1;f.globals[8]=1;f.globals[3]=7;
+    assert_eq!(coherent_session_context(&r),Some(crate::game_session::Context{active:true,frame:1,owner:7,identity:[0,3,1]}));
 }
 #[test]
 fn one_owned_process_survives_game_menu_long_teardown_then_another_game() {
@@ -227,7 +228,7 @@ fn one_owned_process_survives_game_menu_long_teardown_then_another_game() {
     assert!(tracker.control_allowed(11));reset_state_for_session(&mut state,1,false);
     activate_same_type(&r1,&mut state,7,100).unwrap();assert_eq!(state.count,3);tracker.leave();
     for entry in table.iter(){entry.store(0,Ordering::Release);}
-    tracker.observe(Some(crate::game_session::Context{active:false,frame:0,owner:8,identity:[0,0,0]}));
+    tracker.observe(Some(crate::game_session::Context{active:false,frame:0,owner:8,identity:[0,4,0]}));
     reset_state_for_session(&mut state,2,true);assert!(!state.active&&state.pending.is_empty());
     let mut wait=WaitPolicy::default();
     for now in [0,15_000,120_000] {
@@ -320,7 +321,7 @@ fn context_uses_current_values_and_excludes_replay_lobby_exit_and_observer() {
     let mut f = Fixture::new(1, 7, 37);
     let r = f.runtime();
     assert_eq!(r.context(), Some((true, 100, 7)));
-    for (index, value) in [(4, 1), (5, 0), (6, 0), (3, 8)] {
+    for (index, value) in [(4, 1), (5, 0), (5, 1), (5, 2), (5, 4), (5, 5), (6, 0), (6, 2), (3, 8), (3, 255)] {
         let previous = f.globals[index];
         f.globals[index] = value;
         assert!(!r.context().unwrap().0);
@@ -328,6 +329,95 @@ fn context_uses_current_values_and_excludes_replay_lobby_exit_and_observer() {
     }
     f.globals[8] = 101;
     assert_eq!(r.context(), Some((true, 101, 7)));
+}
+
+#[test]
+fn all_playable_slots_keep_hud_and_captured_commands_with_zero_lobby_color_gate() {
+    for owner in 0..8 {
+        for selected_count in [1, 5, 12] {
+            for command in [click_order(false), vec![0x1a, 0], {
+                let mut attack = vec![0; 13]; attack[0] = 0x61; attack[11] = 8; attack
+            }] {
+                let mut f = Fixture::new(16, owner, 37);
+                f.write_u8(15, 0x68, (owner + 1) % 8); // Another player's identical unit.
+                for index in 0..selected_count { f.selection[index] = f.pointer(index); }
+                assert_eq!(f.globals[12], 0); // Color-handler branch rejects nonhosts.
+                let before_selection = *f.selection;
+                let mut runtime = f.runtime();
+                let _vector = attach_vector(&mut runtime, f.pointer(0), 16, 16);
+                assert_eq!(runtime.context(), Some((true, 100, owner)));
+                let mut state = f.state(); state.active = false; state.last_selection.clear();
+                let passive = hud_selection(Some(&runtime), &state, true);
+                assert!(passive.in_game && !passive.control_active);
+                assert_eq!(passive.count, selected_count);
+                activate_same_type(&runtime, &mut state, owner, 100).unwrap();
+                assert_eq!(state.count, 15);
+                let active = hud_selection(Some(&runtime), &state, true);
+                assert!(active.in_game && active.control_active);
+                assert_eq!(active.count, 15);
+                let capture = Capture {
+                    buffer: buffer_snapshot(&runtime).unwrap(),
+                    ids: state.last_selection.clone(),
+                    context: runtime.context().unwrap(),
+                    session: session_identity(&runtime).unwrap(),
+                    owner, kind: 37, shift: state.shift, epoch: 23,
+                };
+                f.outgoing_buffer[..command.len()].copy_from_slice(&command);
+                f.globals[9] = command.len(); // Native callback's owned append fixture.
+                complete_captured_control(&runtime, &mut state, capture, false, 23);
+                assert!(state.active, "owner={owner}; selected={selected_count}");
+                let copied: Vec<_> = state.pending.iter().flat_map(|job| job.ids.clone()).collect();
+                let expected = ids(&(selected_count as u32..15).collect::<Vec<_>>(), 1, 11);
+                assert_eq!(copied, expected);
+                for job in &state.pending {
+                    assert_eq!(job.restore, state.last_selection);
+                    assert_eq!(job.command, command);
+                }
+                assert_eq!(*f.selection, before_selection);
+            }
+        }
+    }
+}
+
+#[test]
+fn color_gate_change_or_unresolved_operand_never_changes_match_identity() {
+    let mut f = Fixture::new(3, 2, 37); let mut runtime = f.runtime();
+    let initial = coherent_session_context(&runtime).unwrap();
+    assert_eq!(initial.identity, [0, 3, 1]);
+    let mut tracker = crate::game_session::Tracker::new();
+    assert_eq!(tracker.enter(Some(initial), 11).decision, crate::game_session::Decision::Active);
+    tracker.leave();
+    for color_gate in [1, 0, 255] {
+        f.globals[12] = color_gate;
+        let current = coherent_session_context(&runtime).unwrap();
+        assert_eq!(current, initial);
+        assert!(!tracker.observe(Some(current)).invalidated);
+        assert_eq!(tracker.generation(), 1); assert!(tracker.control_allowed(11));
+    }
+    runtime.lobby_color_gate = None;
+    assert_eq!(coherent_session_context(&runtime), Some(initial));
+    runtime.lobby_color_gate = Some(Value::Memory(Box::new(Value::Constant(1)), 0, 4));
+    assert_eq!(coherent_session_context(&runtime), Some(initial));
+}
+
+#[test]
+fn menu_case_with_stale_loop_and_frame_still_hides_hud_and_clears_pending_commands() {
+    let mut f = Fixture::new(15, 2, 37); let runtime = f.runtime();
+    let mut state = f.state();
+    assert!(queue_control(&click_order(false), &state.last_selection.clone(), &mut state, &runtime));
+    assert!(!state.pending.is_empty());
+    let mut tracker = crate::game_session::Tracker::new();
+    assert_eq!(tracker.enter(coherent_session_context(&runtime), 11).decision,
+        crate::game_session::Decision::Active);
+    tracker.leave();
+    f.globals[5] = 4; // run_menus, while old continue_game_loop=1 and frame=100 remain.
+    assert_eq!(runtime.context(), Some((false, 100, 2)));
+    assert_eq!(hud_selection(Some(&runtime), &state, true), DisplaySelection::empty(false));
+    assert!(!queue_control(&click_order(false), &state.last_selection.clone(), &mut state, &runtime));
+    assert!(!state.active); assert!(state.pending.is_empty());
+    let change = tracker.observe(coherent_session_context(&runtime));
+    assert!(change.invalidated && change.thread_released);
+    assert!(!tracker.control_allowed(11));
 }
 #[test]
 fn slot_eight_preserves_one_original_then_queues_twelve_plus_two() {
@@ -1074,7 +1164,7 @@ fn hud_hides_for_menu_exit_replay_failed_status_or_missing_context_but_not_pause
     assert_eq!(hud_selection(Some(&f.runtime()), &state, true).count, 1);
     assert_eq!(hud_selection(Some(&f.runtime()), &state, false), DisplaySelection::empty(false));
     assert_eq!(hud_selection(None, &state, true), DisplaySelection::empty(false));
-    for (index, value) in [(4, 1), (5, 0), (6, 0), (3, 8)] {
+    for (index, value) in [(4, 1), (5, 0), (5, 1), (5, 2), (5, 4), (5, 5), (6, 0), (6, 2), (3, 8), (3, 255)] {
         let saved = f.globals[index];
         f.globals[index] = value;
         assert_eq!(hud_selection(Some(&f.runtime()), &state, true), DisplaySelection::empty(false));
@@ -1147,7 +1237,7 @@ fn scmulti2_fallback_snapshot_is_inactive_and_preserves_passive_hud_contract() {
             1 => { state.owner = 0; }, // Local owner changed.
             2 => { state.frame = 101; }, // Previous match/frame.
             3 => { f.globals[4] = 1; }, // Replay.
-            4 => { f.globals[5] = 0; }, // Menu.
+            4 => { f.globals[5] = 4; }, // Menu case, even with stale loop=1.
             5 => { f.globals[6] = 0; }, // Match ended.
             _ => {}, // Failed/waiting module status.
         }

@@ -19,7 +19,6 @@ verification/AllianceTests.cs is a separate model/layout fixture with a Native s
 Compile it with source/managed/AllianceSnapshot.cs and AllianceOverlayForm.cs, x64,
 Drawing/Forms references and warnaserror. Do not combine it with production Native.cs.
 
-Published runtime binaries remain the validated game-session-reconnect-fix-20261007 build.
-The public native source omits three external-data fixture tests; see verification/README.md.
-Full public default native tests: 358 passed; managed: 374 passed.
-The original binary release verification recorded 361 native +374 managed=735.
+Published native runtime: nonhost-control-fix-20261007.
+Other runtime components remain the validated game-session reconnect release.
+Current test counts and source correspondence: TEST-REPORT.md and verification/README.md.

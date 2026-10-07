@@ -281,6 +281,52 @@ mod tests {
     }
 
     #[test]
+    fn explicit_apply_and_native_confirm_use_game_slots_for_every_local_owner() {
+        for owner in 0..alliance::PLAYABLE_SLOTS as u8 {
+            let target = (owner + 1) % alliance::PLAYABLE_SLOTS as u8;
+            let mut current = snapshot();
+            current.owner = owner;
+            for player in &mut current.players {
+                player.controller = if player.slot == target { alliance::COMPUTER }
+                    else { alliance::HUMAN };
+                player.storm_id = if player.slot == target { u32::MAX }
+                    else { u32::from((player.slot + 1) % alliance::PLAYABLE_SLOTS as u8) };
+            }
+            current.alliance_row = std::array::from_fn(|slot| ((owner as usize + slot) % 3) as u8);
+            current.alliance_row[owner as usize] = 1;
+            current.alliance_row[target as usize] = 0;
+            let original = current.clone();
+            let mut request = edits();
+            request.changes = vec![Edit { slot: target, expected: 0, desired: 1 }];
+            let applied = apply_to_current(&request, &current).unwrap();
+            assert_eq!(relation(&applied, target as usize), 1, "owner={owner}");
+            for slot in 0..alliance::ALLIANCE_SLOTS {
+                if slot != target as usize {
+                    assert_eq!(relation(&applied, slot), current.alliance_row[slot]);
+                }
+            }
+
+            let mut native_row = current.alliance_row;
+            let other_human = (owner + 2) % alliance::PLAYABLE_SLOTS as u8;
+            native_row[other_human as usize] = (native_row[other_human as usize] + 1) % 3;
+            let native = packet(native_row, 0xa7);
+            let mut desired = [None; alliance::PLAYABLE_SLOTS];
+            desired[target as usize] = Some(1);
+            let confirmed = merge_authorized_native(&native, &current, &desired).unwrap();
+            assert_eq!(relation(&confirmed, target as usize), 1);
+            assert_eq!(confirmed[4], native[4]);
+            for slot in 0..alliance::ALLIANCE_SLOTS {
+                if slot != target as usize {
+                    assert_eq!(relation(&confirmed, slot), relation(&native, slot));
+                }
+            }
+            assert_eq!(current, original);
+            let mut self_edit = request.clone();
+            self_edit.changes = vec![Edit { slot: owner, expected: 1, desired: 0 }];
+            assert!(apply_to_current(&self_edit, &current).is_none());
+        }
+    }
+    #[test]
     fn parses_exact_bounded_ascii_request_with_lf_crlf_and_optional_last_newline() {
         let expected = edits();
         let lf = "SCALLYEDIT1\t123\t456\t789\t0\t12\t2\nE\t2\t0\t1\nE\t3\t2\t0";
