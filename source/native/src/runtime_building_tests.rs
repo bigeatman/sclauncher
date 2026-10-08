@@ -298,9 +298,9 @@ fn one_original_larva_can_become_one_incomplete_egg_while_copy_jobs_remain() {
     f.write_u16(0, 0x8c, 36);
     f.write_u32(0, 0x140, 0); // Eggs are intentionally incomplete.
     assert!(selected_ids(&runtime, 7, 35, 13).is_none());
-    assert_eq!(runtime.morph_selection_ids(7, 13), Some(original.clone()));
+    assert_eq!(runtime.morph_selection_ids(7, 13, 35), Some(original.clone()));
     assert_eq!(active_selection_ids(&runtime, &state), Some(original.clone()));
-    assert!(runtime.valid_morph_restore(original[0], 7, 13));
+    assert!(runtime.valid_morph_restore(original[0], 7, 13, 35));
     let job = state.pending.front().unwrap();
     assert!(job.ids.iter().all(|id| runtime.valid_id(*id, 7, 35, 13)));
     let records = crate::batch::plan_one(&job.ids, &job.restore, &job.command, 480).unwrap();
@@ -316,16 +316,16 @@ fn later_or_multiple_eggs_cannot_be_silently_restored_as_a_different_selection()
         let mut state = building_state(&f, 35);
         state.last_selection = ids(&[0, 1], 1, 13);
         assert!(queue_control(&morph_packet(37), &state.last_selection.clone(), &mut state, &runtime));
-        assert_eq!(runtime.morph_selection_ids(7, 13), Some(state.last_selection.clone()));
+        assert_eq!(runtime.morph_selection_ids(7, 13, 35), Some(state.last_selection.clone()));
         for index in transformed {
             f.write_u16(index, 0x8c, 36);
             f.write_u32(index, 0x140, 0);
         }
-        assert!(runtime.morph_selection_ids(7, 13).is_none());
+        assert!(runtime.morph_selection_ids(7, 13, 35).is_none());
         assert!(active_selection_ids(&runtime, &state).is_none());
         // Individual IDs remain alive, but exact multi-selection restoration
         // is unavailable; the dispatch guard must reject the entire selection.
-        assert!(state.last_selection.iter().all(|id| runtime.valid_morph_restore(*id, 7, 13)));
+        assert!(state.last_selection.iter().all(|id| runtime.valid_morph_restore(*id, 7, 13, 35)));
     }
 }
 #[test]
@@ -335,17 +335,17 @@ fn morph_restore_identity_rejects_reused_generation_foreign_owner_and_other_unit
     let original = ids(&[0], 1, 13)[0];
     f.write_u16(0, 0x8c, 36);
     f.write_u32(0, 0x140, 0);
-    assert!(runtime.valid_morph_restore(original, 7, 13));
+    assert!(runtime.valid_morph_restore(original, 7, 13, 35));
     f.write_u8(0, 0xe9, 2);
-    assert!(!runtime.valid_morph_restore(original, 7, 13));
-    assert_eq!(runtime.morph_selection_ids(7, 13), Some(ids(&[0], 2, 13)));
+    assert!(!runtime.valid_morph_restore(original, 7, 13, 35));
+    assert_eq!(runtime.morph_selection_ids(7, 13, 35), Some(ids(&[0], 2, 13)));
     f.write_u8(0, 0xe9, 1);
     f.write_u8(0, 0x68, 0);
-    assert!(!runtime.valid_morph_restore(original, 7, 13));
-    assert!(runtime.morph_selection_ids(7, 13).is_none());
+    assert!(!runtime.valid_morph_restore(original, 7, 13, 35));
+    assert!(runtime.morph_selection_ids(7, 13, 35).is_none());
     f.write_u8(0, 0x68, 7);
     f.write_u16(0, 0x8c, 37);
-    assert!(!runtime.valid_morph_restore(original, 7, 13));
+    assert!(!runtime.valid_morph_restore(original, 7, 13, 35));
 }
 #[test]
 fn larva_morph_capture_never_reinterprets_a_queued_movement_or_selection_record() {
@@ -416,7 +416,7 @@ fn actual_morph_completion_accepts_original_egg_and_excludes_it_from_every_copy(
             assert_eq!(job.restore, original);
             assert_eq!(job.command, command);
             assert!(job.ids.iter().all(|id| runtime.valid_id(*id, 7, 35, 13)));
-            assert!(job.restore.iter().all(|id| runtime.valid_morph_restore(*id, 7, 13)));
+            assert!(job.restore.iter().all(|id| runtime.valid_morph_restore(*id, 7, 13, 35)));
             let plan = crate::batch::plan_one(&job.ids, &job.restore, &job.command, 480).unwrap();
             assert_eq!(capture_selection(&plan[2]), Some(original.clone()));
             assert_eq!(plan[1], command);

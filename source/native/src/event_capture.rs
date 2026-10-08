@@ -76,17 +76,17 @@ pub fn observe_append(before: &[u8], after: &[u8], limit: usize) -> Observation 
     Observation::Command(delta.to_vec())
 }
 
-/// A Larva production UI may synchronize its unchanged original selection
+/// A supported unit-morph UI may synchronize its unchanged original selection
 /// immediately before one Morph command. Accept only that exact two-record
 /// shape and only when the caller supplied the validated pre-callback IDs.
 /// Arbitrary selections, additional commands and payload opcode searches remain
 /// rejected by the ordinary observer.
 pub fn observe_control_append(before: &[u8], after: &[u8], limit: usize,
-    larva_original: Option<&[u32]>) -> Observation
+    morph_original: Option<&[u32]>) -> Observation
 {
     let ordinary = observe_append(before, after, limit);
     if ordinary != Observation::Clear(ClearReason::ManualSelection) { return ordinary; }
-    let Some(ids) = larva_original else { return ordinary; };
+    let Some(ids) = morph_original else { return ordinary; };
     if ids.is_empty() || ids.len() > batch::SELECTION_LIMIT || unique_nonzero(ids).is_err() {
         return ordinary;
     }

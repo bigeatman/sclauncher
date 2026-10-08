@@ -1263,3 +1263,5 @@ fn scmulti2_fallback_snapshot_is_inactive_and_preserves_passive_hud_contract() {
     let fields = encoded.trim_end().split('\t').collect::<Vec<_>>();
     assert_eq!((fields[2], fields[3], fields[9], fields[10]), ("0", "0", "1", "37"));
 }
+
+include!("runtime_morph_tests.rs");

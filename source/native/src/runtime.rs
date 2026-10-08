@@ -286,7 +286,7 @@ impl Runtime {
             crate::building_commands::read_metadata(source.table.read()?,source.stride,kind,read_integer)
         }).or_else(|| crate::building_commands::standard_production_metadata(kind))
     }
-    fn morph_restore_unit(&self, pointer: usize, owner: u8, shift: u8) -> Option<u32> {
+    fn morph_restore_unit(&self, pointer: usize, owner: u8, shift: u8, source_kind: u16) -> Option<u32> {
         let layout=self.unit_layout()?;
         let offset=pointer.checked_sub(layout.base)?;
         if offset % UNIT_SIZE != 0 || offset / UNIT_SIZE >= layout.count.unwrap_or(MAX_UNITS)
@@ -298,36 +298,38 @@ impl Runtime {
         let kind=u16::from_le_bytes(data[0x8c..0x8e].try_into().ok()?);
         let flags=u32::from_le_bytes(data[0x140..0x144].try_into().ok()?);
         if data[0x68] != owner || hp <= 0 || sprite == 0 || data[0x69] == 0 || flags & 0x40 != 0 {return None;}
-        if kind != 35 && kind != 36 {return None;}
-        if kind == 35 && flags & 1 == 0 {return None;}
+        if !crate::building_commands::morph_restore_kind(source_kind, kind) {return None;}
+        if kind == source_kind && flags & 1 == 0 {return None;}
         let unit=Unit{pointer,index:(offset/UNIT_SIZE) as u32,minor:data[0xe9],kind,owner,next:0};
         unit.uid(shift)
     }
-    fn morph_selection_ids(&self, owner: u8, shift: u8) -> Option<Vec<u32>> {
+    fn morph_selection_ids(&self, owner: u8, shift: u8, source_kind: u16) -> Option<Vec<u32>> {
         let address=self.selection.read()?;
         let mut ids=Vec::new();let mut seen=HashSet::new();
         for index in 0..12 {
             let pointer=read_integer(address.checked_add(index*8)?,8)?;
             if pointer == 0 {continue;}
-            let id=self.morph_restore_unit(pointer,owner,shift)?;
+            let id=self.morph_restore_unit(pointer,owner,shift,source_kind)?;
             if !seen.insert(id) {return None;}
-            // The first selected unit may be an Egg. Later slots must still
-            // be multi-selectable Larvae; never silently drop later Eggs.
-            if !ids.is_empty() && read_integer(pointer.checked_add(0x8c)?,2)? == 36 {
+            // Ordinary Eggs are not multi-selectable after the first slot.
+            // Lurker Eggs retain multi-selection, so source38 may restore
+            // multiple generation-identical transformed originals unchanged.
+            if source_kind == 35 && !ids.is_empty()
+                && read_integer(pointer.checked_add(0x8c)?,2)? == 36 {
                 return None;
             }
             ids.push(id);
         }
         if ids.is_empty() {None} else {Some(ids)}
     }
-    fn valid_morph_restore(&self, id: u32, owner: u8, shift: u8) -> bool {
+    fn valid_morph_restore(&self, id: u32, owner: u8, shift: u8, source_kind: u16) -> bool {
         if !matches!(shift,0 | 11 | 13) {return false;}
         let mask_shift=if shift==0 {11} else {shift};
         let index=id & ((1 << mask_shift)-1);
         if index==0 {return false;}
         let Some(layout)=self.unit_layout() else {return false;};
         let Some(pointer)=layout.base.checked_add((index as usize-1)*UNIT_SIZE) else {return false;};
-        self.morph_restore_unit(pointer,owner,shift)==Some(id)
+        self.morph_restore_unit(pointer,owner,shift,source_kind)==Some(id)
     }
     // SC:R BwVector is { data, length, capacity }, each pointer-sized. Candidate
     // metadata comes from samase_scarf limits(), whose auxiliary arrays are not
@@ -667,29 +669,30 @@ fn selected_ids(runtime: &Runtime, owner: u8, kind: u16, shift: u8) -> Option<Ve
     selected.iter().map(|unit| unit.uid(shift)).collect()
 }
 fn morph_copies_pending(state: &State) -> bool {
-    state.kind==35 && state.pending.iter().any(|job|job.command.first()==Some(&0x23))
+    state.pending.iter().any(|job|is_supported_morph(&job.command,state.kind))
 }
 fn active_selection_ids(runtime: &Runtime, state: &State) -> Option<Vec<u32>> {
-    if morph_copies_pending(state) {runtime.morph_selection_ids(state.owner,state.shift)}
+    if morph_copies_pending(state) {runtime.morph_selection_ids(state.owner,state.shift,state.kind)}
     else {selected_ids(runtime,state.owner,state.kind,state.shift)}
 }
-fn is_larva_morph(command: &[u8], kind: u16) -> bool {
-    kind == 35 && matches!(crate::building_commands::classify(command),
-        Some(crate::building_commands::Action::Morph { .. }))
+fn is_supported_morph(command: &[u8], kind: u16) -> bool {
+    matches!(crate::building_commands::classify(command),
+        Some(crate::building_commands::Action::Morph { unit })
+            if crate::building_commands::supports_morph(kind, unit))
 }
 fn observed_selection_matches(runtime: &Runtime, state: &State, original: &[u32],
     command: &[u8]) -> bool
 {
     selected_ids(runtime, state.owner, state.kind, state.shift).as_deref() == Some(original)
-        || (is_larva_morph(command, state.kind)
-            && runtime.morph_selection_ids(state.owner, state.shift).as_deref() == Some(original))
+        || (is_supported_morph(command, state.kind)
+            && runtime.morph_selection_ids(state.owner, state.shift, state.kind).as_deref() == Some(original))
 }
 // Numeric, bounded diagnostics in the module's own action log. No code bytes,
 // addresses, raw packets, or additional process access are recorded.
 fn trace_control(runtime: &Runtime, state: &mut State, stage: &str,
     delta_length: Option<usize>, opcode: Option<u8>)
 {
-    if state.control_traces >= 24 || !(state.kind == 35 || state.kind >= 106) { return; }
+    if state.control_traces >= 24 || !(matches!(state.kind, 35 | 38) || state.kind >= 106) { return; }
     state.control_traces += 1;
     let display = runtime.display_selection();
     let row = format!("{}\t{}\t{}\t{}\tControl trace; stage={stage}; native_count={}; native_type={}; pending={}; delta_len={}; opcode={}",
@@ -714,7 +717,7 @@ fn queue_observed_control(data: &[u8], original_ids: &[u32], state: &mut State,
         return false;
     }
     state.frame = frame;
-    let morph_transition = morph_after_original && is_larva_morph(data, state.kind);
+    let morph_transition = morph_after_original && is_supported_morph(data, state.kind);
     if morph_transition && original_ids != state.last_selection.as_slice()
         || if morph_transition { !observed_selection_matches(runtime, state, original_ids, data) }
             else { selected_ids(runtime, state.owner, state.kind, state.shift).as_deref() != Some(original_ids) }
@@ -728,11 +731,11 @@ fn queue_observed_control(data: &[u8], original_ids: &[u32], state: &mut State,
         return false;
     };
     if morph_transition {
-        // The capture proves these exact original Larvae received the command.
-        // A generation-identical Egg no longer appears in the Larva list, but
-        // it must still be excluded from copies and retained for exact restore.
+        // The capture proves these exact source units received the command.
+        // A generation-identical morph Egg no longer appears in the source
+        // list, but remains excluded from copies and retained for exact restore.
         for &id in original_ids {
-            if !runtime.valid_morph_restore(id, state.owner, state.shift) {
+            if !runtime.valid_morph_restore(id, state.owner, state.shift, state.kind) {
                 state.stop("Original morph identity changed; group cleared"); return false;
             }
             if !ids.contains(&id) { ids.push(id); }
@@ -763,7 +766,9 @@ fn queue_observed_control(data: &[u8], original_ids: &[u32], state: &mut State,
         state.count=ids.len();
         if morph_transition && state.pending.is_empty()
             && selected_ids(runtime,state.owner,state.kind,state.shift).is_none() {
-            state.stop("Original larvae already received production; group cleared");
+            state.stop(if state.kind == 35 {
+                "Original larvae already received production; group cleared"
+            } else { "Original units already received morph; group cleared" });
         } else { state.note("Original selection already received control"); }
         return true;
     };
@@ -773,7 +778,7 @@ fn queue_observed_control(data: &[u8], original_ids: &[u32], state: &mut State,
         state.stop("Too many queued commands; group cleared");return false;
     }
     // Production is additive. Rally/stop replaces stale control jobs, but keeps
-    // already requested production for every remaining building or larva.
+    // already requested production for every remaining building or morph source.
     state.pending.retain(|job|crate::building_commands::retains_pending(action,&job.command));
     state.count=matching_count;
     for chunk in ids.chunks(batch_limit) {
@@ -805,14 +810,14 @@ fn foreground_is_game() -> bool {
 fn validate_pending_reference(runtime: &Runtime, state: &State, job: &Pending)
     -> Result<(), &'static str>
 {
-    let morph = is_larva_morph(&job.command, state.kind);
-    let selection = if morph { runtime.morph_selection_ids(state.owner,state.shift) }
+    let morph = is_supported_morph(&job.command, state.kind);
+    let selection = if morph { runtime.morph_selection_ids(state.owner,state.shift,state.kind) }
         else { selected_ids(runtime,state.owner,state.kind,state.shift) };
     if selection.as_deref() != Some(job.restore.as_slice()) {
         return Err("Selection changed before copying; group cleared");
     }
     if job.restore.iter().any(|&id| if morph {
-        !runtime.valid_morph_restore(id,state.owner,state.shift)
+        !runtime.valid_morph_restore(id,state.owner,state.shift,state.kind)
     } else { !runtime.valid_id(id,state.owner,state.kind,state.shift) }) {
         return Err("Reference unit removed; group cleared");
     }
@@ -1141,7 +1146,7 @@ fn start_capture() -> Option<Capture> {
     if !state.active {return None;}
     if morph_copies_pending(&state)
         && selected_ids(runtime,state.owner,state.kind,state.shift).as_deref()!=Some(state.last_selection.as_slice())
-        && runtime.morph_selection_ids(state.owner,state.shift).as_deref()==Some(state.last_selection.as_slice()) {
+        && runtime.morph_selection_ids(state.owner,state.shift,state.kind).as_deref()==Some(state.last_selection.as_slice()) {
         return None;
     }
     let capture = (|| {
@@ -1200,7 +1205,7 @@ fn finish_capture(capture: Capture) {
         BINDING_EPOCH.load(Ordering::Acquire));
 }
 // Extracted so the actual callback-completion lifecycle can be exercised with
-// owned fixture buffers, including post-original Larva -> Egg transitions.
+// owned fixture buffers, including source-specific post-original morph transitions.
 fn complete_captured_control(runtime: &Runtime, state: &mut State, capture: Capture,
     nested: bool, epoch: u64)
 {
@@ -1223,7 +1228,7 @@ fn complete_captured_control(runtime: &Runtime, state: &mut State, capture: Capt
     let appended = after.bytes.get(capture.buffer.bytes.len()..);
     let observation = crate::event_capture::observe_control_append(
         &capture.buffer.bytes, &after.bytes, OUTGOING_BUDGET,
-        (capture.kind == 35).then_some(capture.ids.as_slice()));
+        matches!(capture.kind, 35 | 38).then_some(capture.ids.as_slice()));
     if !matches!(observation, crate::event_capture::Observation::NoObservedAppend) {
         trace_control(runtime, state, "finish-output", appended.map(|s| s.len()),
             appended.and_then(|s| s.first().copied()));
@@ -1238,7 +1243,7 @@ fn complete_captured_control(runtime: &Runtime, state: &mut State, capture: Capt
                 state.stop("Selection changed during control; group cleared"); return;
             }
             queue_observed_control(&command, &capture.ids, state, runtime,
-                is_larva_morph(&command, capture.kind));
+                is_supported_morph(&command, capture.kind));
         }
         crate::event_capture::Observation::NoObservedAppend => {
             if selected_ids(runtime, capture.owner, capture.kind, capture.shift).as_deref()
@@ -1515,7 +1520,7 @@ fn poll_registration() -> Result<RegistrationPoll, String> {
             CALLBACKS_READY.store(true, Ordering::Release);
             set_init_phase(
                 InitPhase::Ready,
-                "Game session connection ready; production child fix 20261007; live validation pending"
+                "Game session connection ready; hydralisk lurker fix 20261009; live validation pending"
                     .into(),
             );
             set_init_diagnostic(format!("READY; changed={}; {detail}", changed.len()));
@@ -1879,7 +1884,7 @@ fn initialize() -> Result<(), String> {
             // READY is justified only by the complete successful CAS operation.
             INSTALLED.store(true, Ordering::Release);
             STATE.lock().unwrap_or_else(|p| p.into_inner()).note(
-                "Unit control ready; production child fix 20261007; live validation pending",
+                "Unit control ready; hydralisk lurker fix 20261009; live validation pending",
             );
             return Ok(());
         }

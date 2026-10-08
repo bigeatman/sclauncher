@@ -1,9 +1,10 @@
 # 검증 기록 구분
 
-현재 native 배포본은 `building-production-child-fix-20261007`입니다. `building-production-child-native-tests.log`는 전체 공개 native 자체 검사 396개 통과·외부 이미지 2개 미실행 기록입니다. `building-production-child-source-build-match.json`은 Rust 26개와 Cargo/build 입력 3개, 총 29개의 일치를 기록합니다. 루트 `STATUS.json`과 `TEST-REPORT.md`는 이번 수정본에 대응합니다. 실게임 생산 확인은 아직 남아 있습니다.
+현재 native 배포본은 `hydralisk-lurker-fix-20261009`입니다. `hydralisk-lurker-native-tests.log`는 공개 native 자체 검사 414개 통과·외부 이미지 2개 미실행 기록입니다. `hydralisk-lurker-source-build-match.json`은 Rust 27개와 Cargo/build 입력 3개, 총 30개의 일치를 기록합니다. 루트 `STATUS.json`과 `TEST-REPORT.md`는 이번 수정본에 대응합니다. 실제 게임의 러커 전체 변태 확인은 아직 남아 있습니다.
 
-관리 코드·바이너리는 변경하지 않았습니다. `building-production-managed-tests.log`는 같은 날 직전 배포 작업에서 실제 실행한 177 + 79 + 118 = 374개 결과입니다. 이번 Native 결과를 합한 검사 수는 770개이며 관리 검사를 다시 실행한 것으로 표시하지 않습니다.
+관리 소스·바이너리는 변경하지 않았습니다. `building-production-managed-tests.log`는 2026-10-07에 실행한 177 + 79 + 118 = 374개 과거 결과입니다. 이번에는 관리 검사를 재실행하지 않았습니다. STATUS의 합계 788은 현재 Native 414와 이 과거 관리 374를 합산한 값이며 재사용 여부와 실행 날짜를 별도로 표시합니다.
 
+`building-production-child-native-tests.log`, `building-production-child-source-build-match.json`, `building-production-child-report-20261007.md`, `building-production-child-status-20261007.json`은 직전 자식 버튼 관찰 수정본의 기록입니다. 당시 Native 396개가 통과했고 공개 입력 29개가 일치했습니다. 해당 기록을 이번 러커 변태 실게임 검증으로 해석하지 않습니다.
 `building-production-native-tests.log`, `building-production-source-build-match.json`, `building-production-click-report-20261007.md`, `building-production-click-status-20261007.json`은 상위 버튼 이벤트 수정본의 과거 기록입니다. 당시 Native 371개가 통과했지만 이후 사용자 확인에서 배럭 3개 중 원래 선택한 한 건물만 생산했습니다. 이번에는 자식 콜백 연결과 실제 관찰 소유 여부 판정을 추가했습니다.
 `nonhost-*` 기록과 `nonhost-control-report-20261007.md`, `nonhost-control-status-20261007.json`은 직전 비방장 게임 판정 수정본의 과거 기록입니다. 당시 native 363 + managed 374 = 737개가 통과했고 실제 비방장 게임 확인은 남아 있었습니다.
 

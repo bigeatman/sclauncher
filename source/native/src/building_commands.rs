@@ -1,7 +1,7 @@
 //! Production and rally policy, independent of camera/overlay discovery.
 //! Protocol evidence: BWAPI BW/OrderTypes.h; GPTP recv_commands/train_cmd_receive.cpp
 //! and CMDRECV_Morph.cpp. Buildings require singleton network selections, while
-//! UnitMorph applies to every selected larva. See TEST-REPORT for source links.
+//! UnitMorph applies to selected Larvae or Hydralisks. See TEST-REPORT for source links.
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Metadata {
@@ -20,7 +20,7 @@ pub fn standard_production_metadata(kind: u16) -> Option<Metadata> {
         106 | 111 | 113 | 114 => 2, // Command Center, Barracks, Factory, Starport
         130..=133 => 1, // Infested Command Center, Hatchery, Lair, Hive: rally only
         154 | 155 | 160 | 167 => 4, // Nexus, Robotics Facility, Gateway, Stargate
-        35 => return Some(Metadata { building: false, produces: false, race_bits: 1 }),
+        35 | 38 => return Some(Metadata { building: false, produces: false, race_bits: 1 }),
         _ => return None,
     };
     Some(Metadata { building: true, produces: true, race_bits })
@@ -78,6 +78,26 @@ pub fn classify(command: &[u8]) -> Option<Action> {
     }
 }
 
+/// UnitMorph source/target pairs accepted for command fan-out. Preserve the
+/// existing Larva path; only add the stock Hydralisk -> Lurker transition.
+/// GPTP CMDRECV_UnitMorph checks Lurker Aspect and resources in the native engine.
+pub fn supports_morph(source: u16, target: u16) -> bool {
+    (source == 35 && target < 106) || (source == 38 && target == 103)
+}
+
+/// Temporary identity changes allowed only when restoring the original captured
+/// selection during an accepted morph. These types are never new dispatch targets.
+/// GPTP orders_Morph1 replaces Larva with Egg and Hydralisk with Lurker Egg,
+/// clearing Completed before assigning the temporary type. Completed morphs are
+/// intentionally outside this short-lived restoration exception.
+pub fn morph_restore_kind(source: u16, current: u16) -> bool {
+    match source {
+        35 => matches!(current, 35 | 36),
+        38 => matches!(current, 38 | 97),
+        _ => false,
+    }
+}
+
 pub fn allowed(action: Action, kind: u16, metadata: Metadata) -> bool {
     let tp_producer = metadata.building && metadata.produces
         && matches!(metadata.race_bits & 7, 2 | 4);
@@ -91,7 +111,7 @@ pub fn allowed(action: Action, kind: u16, metadata: Metadata) -> bool {
         // modified metadata table gives one of these buildings T/P race bits.
         Action::Train { unit } => tp_producer && !zerg_producer_type && unit < 106,
         Action::Rally { .. } => tp_producer || zerg_rally,
-        Action::Morph { unit } => kind == 35 && unit < 106,
+        Action::Morph { unit } => supports_morph(kind, unit),
         Action::RightClick { .. } | Action::Attack { .. } | Action::Stop { .. } => true,
     }
 }
@@ -105,7 +125,7 @@ pub fn dispatch_batch_limit(metadata: Metadata) -> usize {
 /// discard production requests that have already been observed and accepted.
 pub fn retains_pending(new_action: Action, pending_command: &[u8]) -> bool {
     let production=classify(pending_command).is_some_and(Action::is_production);
-    // Morph supersedes old larva movement before its type becomes Egg.
+    // Morph supersedes old movement before its type becomes Egg or Lurker Egg.
     // Otherwise a deferred old movement job could cancel all accepted morphs.
     if matches!(new_action,Action::Morph{..}) {return production;}
     new_action.is_production() || new_action.queued() || production
@@ -146,6 +166,71 @@ pub fn read_metadata(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn hydralisk_lurker_packet_and_nonbuilding_metadata_are_supported() {
+        let morph = classify(&[0x23, 103, 0]).unwrap();
+        assert_eq!(morph, Action::Morph { unit: 103 });
+        assert!(morph.is_production());
+        assert!(!morph.queued());
+        let meta = standard_production_metadata(38).unwrap();
+        assert_eq!(meta, Metadata { building: false, produces: false, race_bits: 1 });
+        assert_eq!(dispatch_batch_limit(meta), 12);
+        assert!(allowed(morph, 38, meta));
+        assert!(allowed(morph, 38, Metadata::default()));
+        assert!(!allowed(Action::Train { unit: 103 }, 38, meta));
+        for packet in [&[0x23, 103][..], &[0x23, 103, 0, 0],
+            &[0x23, 103, 1], &[0x35, 103, 0], &[0x23, 106, 0], &[0x23]] {
+            assert!(classify(packet).is_none(), "{packet:?}");
+        }
+    }
+    #[test]
+    fn hydralisk_morph_policy_does_not_expand_other_sources_or_targets() {
+        for target in 0..228 {
+            assert_eq!(supports_morph(38, target), target == 103);
+            assert_eq!(allowed(Action::Morph { unit: target }, 38, Metadata::default()),
+                target == 103);
+        }
+        for source in [0, 36, 37, 39, 43, 44, 62, 97, 103, 106, 131, 132, 133, 137, 141, 146, 160] {
+            assert!(!supports_morph(source, 103));
+            assert!(!allowed(Action::Morph { unit: 103 }, source, producer(1)));
+        }
+        for target in [0, 37, 38, 64, 103, 105] {
+            assert!(supports_morph(35, target));
+        }
+        for target in [106, 131, 132, 133, u16::MAX] {
+            assert!(!supports_morph(35, target));
+            assert!(!supports_morph(38, target));
+        }
+    }
+    #[test]
+    fn morph_restoration_accepts_only_the_source_specific_temporary_identity() {
+        assert!(morph_restore_kind(35, 35));
+        assert!(morph_restore_kind(35, 36));
+        assert!(morph_restore_kind(38, 38));
+        assert!(morph_restore_kind(38, 97));
+        for current in [0, 35, 36, 37, 43, 59, 62, 103, 106, 131, u16::MAX] {
+            assert!(!morph_restore_kind(38, current));
+        }
+        for current in [38, 97, 103, 106] {
+            assert!(!morph_restore_kind(35, current));
+        }
+        for source in [36, 37, 43, 97, 103, 106, 131, u16::MAX] {
+            for current in [35, 36, 38, 97] {
+                assert!(!morph_restore_kind(source, current));
+            }
+        }
+    }
+    #[test]
+    fn lurker_morph_preserves_production_but_drops_stale_movement() {
+        let morph = Action::Morph { unit: 103 };
+        for pending in [&[0x1f, 0, 0][..], &[0x23, 37, 0], &[0x23, 103, 0]] {
+            assert!(retains_pending(morph, pending));
+        }
+        for pending in [vec![0x1a, 0], target(14, 0), target(40, 0), vec![0x35, 132, 0]] {
+            assert!(!retains_pending(morph, &pending));
+        }
+    }
 
     fn producer(race_bits: u8) -> Metadata {
         Metadata { building: true, produces: true, race_bits }
