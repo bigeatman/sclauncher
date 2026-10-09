@@ -37,7 +37,9 @@ pub const EXT_HIDE_FOLLOWUP: usize = 0x6;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Control {
     pub control: usize,
-    /// The verified, unchanged native event handler, not a replacement handler.
+    /// The observed callback. Children always retain verified native handlers;
+    /// the root may carry a caller-verified owned wrapper. Never forward the
+    /// root wrapper as if it were the saved native original.
     pub callback: usize,
     pub id: i16,
     pub ty: u16,
@@ -243,9 +245,19 @@ where C: Fn(usize) -> bool {
 /// Return the first, visible, enabled native Minimap only. A preceding modal
 /// prevents an intent, even if a Minimap remains behind it in the root list.
 /// Absence/hidden roots return None; malformed or ambiguous metadata is an error.
-pub fn discover<F, C>(first_dialog: usize, is_code: C, mut read: F)
+pub fn discover<F, C>(first_dialog: usize, is_code: C, read: F)
     -> Result<Option<Discovery>, DiscoveryError>
 where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool {
+    discover_with_root_provider(first_dialog, is_code, |_|false, read)
+}
+
+/// Accept an already-installed root wrapper only through the caller's exact
+/// provider predicate. The caller must verify its immutable saved original is
+/// executable native game code. The alliance/chat children still require native
+/// callbacks; root-provider recognition never applies to child handlers.
+pub fn discover_with_root_provider<F, C, O>(first_dialog: usize, is_code: C,
+    is_owned_root_provider: O, mut read: F) -> Result<Option<Discovery>, DiscoveryError>
+where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool, O: Fn(usize) -> bool {
     let mut roots = Vec::new();
     let mut root_seen = HashSet::new();
     let mut current = first_dialog;
@@ -280,7 +292,10 @@ where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool {
         || !(64..=512).contains(&area.width()) || !(64..=480).contains(&area.height()) {
         return Err(DiscoveryError::InvalidRoot);
     }
-    native_callback(root_control, &is_code)?;
+    if root_control.callback == 0
+        || (!is_code(root_control.callback) && !is_owned_root_provider(root_control.callback)) {
+        return Err(DiscoveryError::UnknownCallback);
+    }
     let child_slot = root.address.checked_add(FIRST_CHILD).ok_or(DiscoveryError::InvalidPointer)?;
     let mut pointer_bytes = [0; 8];
     if !read(child_slot, &mut pointer_bytes) { return Err(DiscoveryError::ReadFailed); }
@@ -316,7 +331,16 @@ where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool {
 pub fn recheck<F, C>(first_dialog: usize, expected: &Discovery, is_code: C, read: F)
     -> Result<(), DiscoveryError>
 where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool {
-    if discover(first_dialog, is_code, read)?.as_ref() != Some(expected) {
+    recheck_with_root_provider(first_dialog, expected, is_code, |_|false, read)
+}
+
+/// Recheck with the same verified root-provider policy used for discovery.
+/// The exact observed callback and every header witness must remain unchanged.
+pub fn recheck_with_root_provider<F, C, O>(first_dialog: usize, expected: &Discovery,
+    is_code: C, is_owned_root_provider: O, read: F) -> Result<(), DiscoveryError>
+where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool, O: Fn(usize) -> bool {
+    if discover_with_root_provider(first_dialog, is_code, is_owned_root_provider, read)?
+        .as_ref() != Some(expected) {
         return Err(DiscoveryError::Changed);
     }
     Ok(())
@@ -376,6 +400,58 @@ mod tests {
         fn found(&self) -> Discovery { self.discover().unwrap().unwrap() }
     }
 
+    #[test] fn owned_root_wrapper_requires_explicit_verified_provider_policy() {
+        const WRAPPER:usize=0x30000;
+        let mut f=Fixture::new(); f.word(ROOT,CALLBACK,WRAPPER);
+        let native=|p|(ORIGINAL..ORIGINAL+0x1000).contains(&p);
+        assert_eq!(f.discover(),Err(DiscoveryError::UnknownCallback));
+        assert_eq!(discover_with_root_provider(ROOT,native,|_|false,|at,out|f.read(at,out)),
+            Err(DiscoveryError::UnknownCallback));
+        assert_eq!(discover_with_root_provider(ROOT,native,|p|p==WRAPPER+8,|at,out|f.read(at,out)),
+            Err(DiscoveryError::UnknownCallback));
+        let before=f.bytes.clone();
+        let found=discover_with_root_provider(ROOT,native,|p|p==WRAPPER,|at,out|f.read(at,out))
+            .unwrap().unwrap();
+        assert_eq!(found.minimap.callback,WRAPPER);
+        assert_eq!(found.alliance.callback,ORIGINAL+0x30);
+        assert_eq!(found.intent(true).unwrap().callback,ORIGINAL+0x30);
+        assert_eq!(f.bytes,before);
+        assert_eq!(recheck_with_root_provider(ROOT,&found,native,|p|p==WRAPPER,|at,out|f.read(at,out)),Ok(()));
+        assert_eq!(recheck(ROOT,&found,native,|at,out|f.read(at,out)),Err(DiscoveryError::UnknownCallback));
+        f.word(ROOT,CALLBACK,0);
+        assert_eq!(discover_with_root_provider(ROOT,native,|_|true,|at,out|f.read(at,out)),
+            Err(DiscoveryError::UnknownCallback));
+    }
+    #[test] fn root_wrapper_policy_never_accepts_wrapped_alliance_or_chat_children() {
+        const WRAPPER:usize=0x30000;
+        let native=|p|(ORIGINAL..ORIGINAL+0x1000).contains(&p);
+        for child in [LEFT,RIGHT] {
+            let mut f=Fixture::new(); f.word(ROOT,CALLBACK,WRAPPER); f.word(child,CALLBACK,WRAPPER);
+            assert_eq!(discover_with_root_provider(ROOT,native,|_|true,|at,out|f.read(at,out)),
+                Err(DiscoveryError::UnknownCallback));
+        }
+    }
+    #[test] fn owned_root_provider_recheck_rejects_changed_callback_and_topology() {
+        const WRAPPER:usize=0x30000;
+        let native=|p|(ORIGINAL..ORIGINAL+0x1000).contains(&p);
+        for changed in [ORIGINAL,WRAPPER+8] {
+            let mut f=Fixture::new(); f.word(ROOT,CALLBACK,WRAPPER);
+            let found=discover_with_root_provider(ROOT,native,|p|p==WRAPPER,|at,out|f.read(at,out))
+                .unwrap().unwrap();
+            f.word(ROOT,CALLBACK,changed);
+            // Even a newly verified provider cannot replace the exact witness.
+            assert_eq!(recheck_with_root_provider(ROOT,&found,native,|p|p==WRAPPER||p==WRAPPER+8,
+                |at,out|f.read(at,out)),Err(DiscoveryError::Changed));
+        }
+        let mut f=Fixture::new(); f.word(ROOT,CALLBACK,WRAPPER);
+        let found=discover_with_root_provider(ROOT,native,|p|p==WRAPPER,|at,out|f.read(at,out))
+            .unwrap().unwrap();
+        f.word(RIGHT,PARENT,OTHER);
+        assert_eq!(recheck_with_root_provider(ROOT,&found,native,|p|p==WRAPPER,|at,out|f.read(at,out)),
+            Err(DiscoveryError::WrongParent));
+        assert_eq!(recheck_with_root_provider(0,&found,native,|p|p==WRAPPER,|at,out|f.read(at,out)),
+            Err(DiscoveryError::Changed));
+    }
     #[test] fn spatial_left_not_numeric_id_defines_alliance() {
         let mut f=Fixture::new();
         assert_eq!(f.found().alliance.control,LEFT);

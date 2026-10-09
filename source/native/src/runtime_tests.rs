@@ -1265,3 +1265,5 @@ fn scmulti2_fallback_snapshot_is_inactive_and_preserves_passive_hud_contract() {
 }
 
 include!("runtime_morph_tests.rs");
+
+include!("runtime_minimap_tests.rs");

@@ -579,14 +579,16 @@ pub(super) fn maintain_button(runtime:&Runtime) {
     let Some(gui)=runtime.gui.as_ref()else{button_state(1);return;};
     let Some(first)=gui.first_dialog.read()else{button_state(1);return;};
     let is_code=|p:usize|p>=gui.code_start&&p.checked_add(16).is_some_and(|end|end<=gui.code_end);
-    let Ok(Some(found))=button::discover(first,is_code,read_memory)else{button_state(1);return;};
+    let is_owned_root=|p:usize|owned_minimap_provider(p,MINIMAP_ORIGINAL.load(Ordering::Acquire),
+        minimap_callback as *const () as usize,is_code);
+    let Ok(Some(found))=button::discover_with_root_provider(first,is_code,is_owned_root,read_memory)else{button_state(1);return;};
     let desired=snapshot.has_alliance_targets();
     let Some(intent)=found.intent(desired)else{button_state(if found.alliance.visible==desired {2}else{5});return;};
     // Current UI-thread discovery is rechecked immediately. No cached heap
     // pointers survive between pumps, or between hide and its redraw event.
     if gui.first_dialog.read()!=Some(first)||runtime.context()!=Some(context)
         ||session_identity(runtime)!=Some(identity)||config.snapshot(context.2).as_ref()!=Some(&snapshot)
-        ||button::recheck(first,&found,is_code,read_memory).is_err()
+        ||button::recheck_with_root_provider(first,&found,is_code,is_owned_root,read_memory).is_err()
         ||gui.first_dialog.read()!=Some(first)
         ||!stop_is_clear(STOP_EVENT.load(Ordering::Acquire)) {
         button_state(5);return;
@@ -599,7 +601,7 @@ pub(super) fn maintain_button(runtime:&Runtime) {
     if intent.followup_ext_type(result).is_some() {
         // Redraw is separate; rediscover current object after the native hide.
         if gui.first_dialog.read()==Some(first) {
-            if let Ok(Some(fresh))=button::discover(first,is_code,read_memory) {
+            if let Ok(Some(fresh))=button::discover_with_root_provider(first,is_code,is_owned_root,read_memory) {
                 if fresh.minimap.control==found.minimap.control
                     &&fresh.minimap.callback==found.minimap.callback&&fresh.minimap.area==found.minimap.area
                     &&fresh.alliance.control==intent.control&&fresh.alliance.callback==intent.callback
@@ -607,7 +609,7 @@ pub(super) fn maintain_button(runtime:&Runtime) {
                     &&fresh.alliance.area==found.alliance.area&&!fresh.alliance.visible
                     &&runtime.context()==Some(context)&&session_identity(runtime)==Some(identity)
                     &&config.snapshot(context.2).as_ref()==Some(&snapshot)
-                    &&button::recheck(first,&fresh,is_code,read_memory).is_ok()
+                    &&button::recheck_with_root_provider(first,&fresh,is_code,is_owned_root,read_memory).is_ok()
                     &&gui.first_dialog.read()==Some(first) {
                     event.ext_type=button::EXT_HIDE_FOLLOWUP;
                     unsafe{original(intent.control as *const c_void,(&mut event as *mut ControlEvent).cast());}
@@ -616,7 +618,7 @@ pub(super) fn maintain_button(runtime:&Runtime) {
         }
     }
     // Record observed state, not merely the fact that an event was sent.
-    let fresh=gui.first_dialog.read().and_then(|current|button::discover(current,is_code,read_memory).ok().flatten());
+    let fresh=gui.first_dialog.read().and_then(|current|button::discover_with_root_provider(current,is_code,is_owned_root,read_memory).ok().flatten());
     let applied=fresh.as_ref().is_some_and(|now|now.alliance.control==intent.control
         &&now.alliance.callback==intent.callback&&now.alliance.visible==snapshot.has_alliance_targets());
     button_state(if applied {if snapshot.has_alliance_targets(){3}else{4}}else{5});

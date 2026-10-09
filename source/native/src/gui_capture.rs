@@ -1,4 +1,4 @@
-//! Discovery of StarCraft Remastered command-panel and direct button callbacks.
+//! Discovery of StarCraft Remastered console roots and direct command-panel buttons.
 //!
 //! This module reads bounded root lists and direct command-panel button children
 //! through caller-supplied readers. It never changes protection, patches code,
@@ -25,6 +25,7 @@ const STRING_CAPACITY_OFFSET: usize = 0x30;
 const STRING_INLINE_OFFSET: usize = 0x38;
 const STRING_INLINE_SIZE: usize = 16;
 const PANEL_NAME: &[u8; 8] = b"StatBtn\0";
+const MINIMAP_NAME: &[u8; 8] = b"Minimap\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Target {
@@ -43,6 +44,8 @@ pub enum DiscoveryError {
     TooManyRoots,
     InvalidName,
     DuplicatePanel,
+    DuplicateMinimap,
+    InvalidMinimapRoot,
     UnknownCallback,
     ChangedRoot,
     InvalidPanelRoot,
@@ -53,13 +56,15 @@ pub enum DiscoveryError {
 }
 impl std::fmt::Display for DiscoveryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Command panel discovery: {}", match self {
+        write!(f, "Console callback discovery: {}", match self {
             Self::InvalidPointer => "invalid or unaligned root pointer",
             Self::ReadFailed => "root or name read failed",
             Self::CyclicRoots => "cyclic root list",
             Self::TooManyRoots => "root count exceeded limit",
             Self::InvalidName => "invalid command-panel name storage",
             Self::DuplicatePanel => "multiple StatBtn roots",
+            Self::DuplicateMinimap => "multiple Minimap roots",
+            Self::InvalidMinimapRoot => "Minimap is not a dialog root",
             Self::UnknownCallback => "callback is outside verified game code",
             Self::ChangedRoot => "root identity or callback changed",
             Self::InvalidPanelRoot => "StatBtn is not a dialog root",
@@ -92,8 +97,13 @@ where F: FnMut(usize, &mut [u8]) -> bool {
 fn panel_from_bytes<F>(control: usize, bytes: &[u8], read: &mut F)
     -> Result<Option<Target>, DiscoveryError>
 where F: FnMut(usize, &mut [u8]) -> bool {
+    named_from_bytes(control, bytes, PANEL_NAME, read)
+}
+fn named_from_bytes<F>(control: usize, bytes: &[u8], expected_name: &[u8; 8], read: &mut F)
+    -> Result<Option<Target>, DiscoveryError>
+where F: FnMut(usize, &mut [u8]) -> bool {
     let length = word(bytes, STRING_LENGTH_OFFSET);
-    if length != PANEL_NAME.len() - 1 {
+    if length != expected_name.len() - 1 {
         return Ok(None);
     }
     let data = word(bytes, STRING_DATA_OFFSET);
@@ -102,7 +112,7 @@ where F: FnMut(usize, &mut [u8]) -> bool {
     let raw_capacity = word(bytes, STRING_CAPACITY_OFFSET);
     let inline = raw_capacity & !(usize::MAX >> 1) != 0;
     let capacity = raw_capacity & (usize::MAX >> 1);
-    if data < 0x10000 || data.checked_add(PANEL_NAME.len()).is_none()
+    if data < 0x10000 || data.checked_add(expected_name.len()).is_none()
         || capacity < length || capacity > 4096
         || (inline && (data != control + STRING_INLINE_OFFSET || length >= STRING_INLINE_SIZE)) {
         return Err(DiscoveryError::InvalidName);
@@ -111,7 +121,7 @@ where F: FnMut(usize, &mut [u8]) -> bool {
     if !read(data, &mut name) {
         return Err(DiscoveryError::ReadFailed);
     }
-    if &name != PANEL_NAME {
+    if &name != expected_name {
         return Ok(None);
     }
     Ok(Some(Target {
@@ -121,20 +131,25 @@ where F: FnMut(usize, &mut [u8]) -> bool {
     }))
 }
 
-/// Traverse only a bounded, acyclic list of root dialogs. The exact command-panel
-/// name prevents confusing the wireframe/status dialog with the command panel.
-/// Original callback candidates must be in caller-verified executable game code.
-/// Existing replacements are recognized but never recorded as originals here.
-pub fn discover_stat_button<F, C>(
+#[derive(Debug, Eq, PartialEq)]
+struct NamedObservation {
+    target: Option<Target>,
+    roots: Vec<(usize, [u8; CONTROL_READ_SIZE])>,
+}
+
+fn discover_named_root<F, C>(
     first_dialog: usize,
     replacement: usize,
-    is_code: C,
-    mut read: F,
-) -> Result<Option<Target>, DiscoveryError>
+    expected_name: &[u8; 8],
+    duplicate_error: DiscoveryError,
+    is_code: &C,
+    read: &mut F,
+) -> Result<NamedObservation, DiscoveryError>
 where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool {
     let mut seen = HashSet::new();
     let mut current = first_dialog;
     let mut result = None;
+    let mut roots = Vec::new();
     while current != 0 {
         if seen.len() >= MAX_ROOTS {
             return Err(DiscoveryError::TooManyRoots);
@@ -150,17 +165,78 @@ where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool {
             return Err(DiscoveryError::ReadFailed);
         }
         let next = word(&bytes, 0);
-        if let Some(target) = panel_from_bytes(current, &bytes, &mut read)? {
+        if let Some(target) = named_from_bytes(current, &bytes, expected_name, read)? {
             if target.callback == 0 || (target.callback != replacement && !is_code(target.callback)) {
                 return Err(DiscoveryError::UnknownCallback);
             }
             if result.replace(target).is_some() {
-                return Err(DiscoveryError::DuplicatePanel);
+                return Err(duplicate_error);
             }
         }
+        roots.push((current, bytes));
         current = next;
     }
-    Ok(result)
+    Ok(NamedObservation { target: result, roots })
+}
+
+/// Traverse only a bounded, acyclic list of root dialogs. The exact command-panel
+/// name prevents confusing the wireframe/status dialog with the command panel.
+/// Original callback candidates must be in caller-verified executable game code.
+/// Existing replacements are recognized but never recorded as originals here.
+pub fn discover_stat_button<F, C>(
+    first_dialog: usize,
+    replacement: usize,
+    is_code: C,
+    mut read: F,
+) -> Result<Option<Target>, DiscoveryError>
+where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool {
+    Ok(discover_named_root(first_dialog, replacement, PANEL_NAME,
+        DiscoveryError::DuplicatePanel, &is_code, &mut read)?.target)
+}
+
+/// Discover the exact Minimap dialog root, independently of StatBtn. Minimap
+/// target clicks dispatch through this root's own two-argument u32 callback.
+/// Both passes must agree on bounded root topology, headers, exact name, and
+/// provider; discovery never follows children, invokes a callback, or writes.
+/// Caller must still recheck current membership immediately before a UI-thread
+/// callback-slot CAS, because two stable reads do not reserve object lifetime.
+pub fn discover_minimap<F, C>(
+    first_dialog: usize,
+    replacement: usize,
+    is_code: C,
+    mut read: F,
+) -> Result<Option<Target>, DiscoveryError>
+where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool {
+    let first = discover_named_root(first_dialog, replacement, MINIMAP_NAME,
+        DiscoveryError::DuplicateMinimap, &is_code, &mut read)?;
+    if let Some(target) = first.target {
+        let header = first.roots.iter().find(|(address, _)| *address == target.control)
+            .ok_or(DiscoveryError::ChangedRoot)?;
+        if control_type(&header.1) != 0 { return Err(DiscoveryError::InvalidMinimapRoot); }
+    }
+    let second = discover_named_root(first_dialog, replacement, MINIMAP_NAME,
+        DiscoveryError::DuplicateMinimap, &is_code, &mut read)?;
+    if first != second { return Err(DiscoveryError::ChangedRoot); }
+    Ok(first.target)
+}
+
+/// Re-resolve exact current Minimap list membership and provider. A readable old
+/// heap control or matching name outside the current root list is insufficient.
+pub fn recheck_minimap<F, C>(
+    first_dialog: usize,
+    expected: Target,
+    replacement: usize,
+    is_code: C,
+    read: F,
+) -> Result<(), DiscoveryError>
+where F: FnMut(usize, &mut [u8]) -> bool, C: Fn(usize) -> bool {
+    if expected.slot_address != expected.control.checked_add(CALLBACK_OFFSET)
+        .ok_or(DiscoveryError::InvalidPointer)?
+        || !pointer_ok(expected.control, CONTROL_READ_SIZE) {
+        return Err(DiscoveryError::InvalidPointer);
+    }
+    if discover_minimap(first_dialog, replacement, is_code, read)? == Some(expected) { Ok(()) }
+    else { Err(DiscoveryError::ChangedRoot) }
 }
 
 /// Recheck an object while its callback is being dispatched or immediately
@@ -644,6 +720,155 @@ mod tests {
                     success
                 });
             assert_eq!(result, Err(DiscoveryError::ChangedChild));
+        }
+    }
+
+    impl Fixture {
+        fn minimap(&self, first: usize) -> Result<Option<Target>, DiscoveryError> {
+            discover_minimap(first, REPLACEMENT, |p| matches!(p, ORIGINAL | CHILD_ORIGINAL),
+                |at, out| self.read(at, out))
+        }
+        fn check_minimap(&self, first: usize, expected: Target) -> Result<(), DiscoveryError> {
+            recheck_minimap(first, expected, REPLACEMENT,
+                |p| matches!(p, ORIGINAL | CHILD_ORIGINAL), |at, out| self.read(at, out))
+        }
+    }
+
+    #[test]
+    fn minimap_callback_is_independent_of_status_and_command_panel_roots() {
+        let mut f = Fixture::new();
+        f.root(BASE, BASE + 0x100, b"StatData", 0);
+        f.root(BASE + 0x100, BASE + 0x200, b"StatBtn", ORIGINAL);
+        f.root(BASE + 0x200, 0, b"Minimap", CHILD_ORIGINAL);
+        let target = f.minimap(BASE).unwrap().unwrap();
+        assert_eq!(target, Target {
+            control: BASE + 0x200, slot_address: BASE + 0x260, callback: CHILD_ORIGINAL,
+        });
+        assert!(f.check_minimap(BASE, target).is_ok());
+        assert_eq!(f.find(BASE).unwrap().unwrap().control, BASE + 0x100);
+        assert_eq!(f.minimap(0), Ok(None));
+    }
+
+    #[test]
+    fn minimap_requires_exact_name_and_accepts_only_valid_inline_storage() {
+        for name in [b"StatBtn".as_slice(), b"MinimaP", b"minimap", b"MinimapX", b"MiniMap"] {
+            let mut f = Fixture::new(); f.root(BASE, 0, name, ORIGINAL);
+            assert_eq!(f.minimap(BASE), Ok(None));
+        }
+        let mut f = Fixture::new(); f.root(BASE, 0, b"Minimap", ORIGINAL);
+        f.bytes[0x87] = b'X';
+        assert_eq!(f.minimap(BASE), Ok(None));
+        f.set_word(BASE, STRING_DATA_OFFSET, BASE + STRING_INLINE_OFFSET);
+        f.set_word(BASE, STRING_CAPACITY_OFFSET, 0x8000_0000_0000_000f);
+        f.bytes[STRING_INLINE_OFFSET..STRING_INLINE_OFFSET + 8].copy_from_slice(b"Minimap\0");
+        let target = f.minimap(BASE).unwrap().unwrap();
+        assert!(f.check_minimap(BASE, target).is_ok());
+        f.set_word(BASE, STRING_DATA_OFFSET, BASE + 0x80);
+        assert_eq!(f.minimap(BASE), Err(DiscoveryError::InvalidName));
+        f.set_word(BASE, STRING_DATA_OFFSET, BASE + STRING_INLINE_OFFSET);
+        f.set_word(BASE, STRING_CAPACITY_OFFSET, 0x8000_0000_0000_0006);
+        assert_eq!(f.minimap(BASE), Err(DiscoveryError::InvalidName));
+    }
+
+    #[test]
+    fn minimap_accepts_its_owned_replacement_and_rejects_null_or_foreign_callbacks() {
+        for callback in [ORIGINAL, CHILD_ORIGINAL, REPLACEMENT] {
+            let mut f = Fixture::new(); f.root(BASE, 0, b"Minimap", callback);
+            assert_eq!(f.minimap(BASE).unwrap().unwrap().callback, callback);
+        }
+        for callback in [0, CHILD_REPLACEMENT, 0x111111] {
+            let mut f = Fixture::new(); f.root(BASE, 0, b"Minimap", callback);
+            assert_eq!(f.minimap(BASE), Err(DiscoveryError::UnknownCallback));
+        }
+    }
+
+    #[test]
+    fn minimap_discovery_requires_unique_acyclic_bounded_root_membership() {
+        let mut f = Fixture::new();
+        f.root(BASE, BASE + 0x100, b"Minimap", ORIGINAL);
+        f.root(BASE + 0x100, 0, b"Minimap", CHILD_ORIGINAL);
+        assert_eq!(f.minimap(BASE), Err(DiscoveryError::DuplicateMinimap));
+        f.root(BASE + 0x100, BASE, b"StatBtn", ORIGINAL);
+        assert_eq!(f.minimap(BASE), Err(DiscoveryError::CyclicRoots));
+        let mut f = Fixture::new();
+        for index in 0..MAX_ROOTS {
+            let root = BASE + index * 0x100;
+            let last = index + 1 == MAX_ROOTS;
+            f.root(root, if last { 0 } else { root + 0x100 },
+                if last { b"Minimap" } else { b"Other" }, ORIGINAL);
+        }
+        assert_eq!(f.minimap(BASE).unwrap().unwrap().control,
+            BASE + (MAX_ROOTS - 1) * 0x100);
+        f.set_word(BASE + (MAX_ROOTS - 1) * 0x100, 0, BASE + MAX_ROOTS * 0x100);
+        assert_eq!(f.minimap(BASE), Err(DiscoveryError::TooManyRoots));
+        for pointer in [1, BASE + 1, usize::MAX - 7] {
+            assert_eq!(f.minimap(pointer), Err(DiscoveryError::InvalidPointer));
+        }
+        assert_eq!(f.minimap(BASE + f.bytes.len()), Err(DiscoveryError::ReadFailed));
+    }
+
+    #[test]
+    fn minimap_named_button_is_not_accepted_as_a_dialog_root() {
+        let mut f = Fixture::new(); f.root(BASE, 0, b"Minimap", ORIGINAL);
+        let start = CONTROL_TYPE_OFFSET;
+        f.bytes[start..start + 2].copy_from_slice(&2u16.to_le_bytes());
+        assert_eq!(f.minimap(BASE), Err(DiscoveryError::InvalidMinimapRoot));
+    }
+
+    #[test]
+    fn minimap_recheck_requires_current_membership_exact_slot_name_and_provider() {
+        let mut f = Fixture::new(); f.root(BASE, 0, b"Minimap", ORIGINAL);
+        let target = f.minimap(BASE).unwrap().unwrap();
+        assert!(f.check_minimap(BASE, target).is_ok());
+        assert_eq!(f.check_minimap(BASE, Target { slot_address: target.slot_address + 8, ..target }),
+            Err(DiscoveryError::InvalidPointer));
+        assert_eq!(f.check_minimap(0, target), Err(DiscoveryError::ChangedRoot));
+        f.root(BASE, 0, b"Minimap", CHILD_ORIGINAL);
+        assert_eq!(f.check_minimap(BASE, target), Err(DiscoveryError::ChangedRoot));
+        f.root(BASE, 0, b"StatBtn", ORIGINAL);
+        assert_eq!(f.check_minimap(BASE, target), Err(DiscoveryError::ChangedRoot));
+        f.root(BASE, 0, b"Minimap", ORIGINAL);
+        f.set_word(BASE, STRING_DATA_OFFSET, BASE + f.bytes.len());
+        assert_eq!(f.minimap(BASE), Err(DiscoveryError::ReadFailed));
+    }
+
+    #[test]
+    fn recreated_minimap_root_does_not_authorize_a_still_readable_old_slot() {
+        let mut f = Fixture::new(); f.root(BASE, 0, b"Minimap", ORIGINAL);
+        let old = f.minimap(BASE).unwrap().unwrap();
+        f.root(BASE + 0x100, 0, b"Minimap", REPLACEMENT);
+        let new = f.minimap(BASE + 0x100).unwrap().unwrap();
+        assert_ne!(old.control, new.control);
+        assert!(f.check_minimap(BASE + 0x100, new).is_ok());
+        assert_eq!(f.check_minimap(BASE + 0x100, old), Err(DiscoveryError::ChangedRoot));
+        let mut bytes = [0; CONTROL_READ_SIZE];
+        assert!(f.read(old.control, &mut bytes));
+    }
+
+    #[test]
+    fn minimap_topology_name_or_provider_changing_between_passes_is_rejected() {
+        use std::cell::RefCell;
+        for mutation in 0..3 {
+            let mut f = Fixture::new();
+            f.root(BASE, BASE + 0x100, b"Minimap", ORIGINAL);
+            f.root(BASE + 0x100, 0, b"StatBtn", ORIGINAL);
+            let f = RefCell::new(f);
+            let mut changed = false;
+            let result = discover_minimap(BASE, REPLACEMENT,
+                |p| matches!(p, ORIGINAL | CHILD_ORIGINAL), |at, out| {
+                    let success = f.borrow().read(at, out);
+                    if !changed && at == BASE + 0x100 && out.len() == CONTROL_READ_SIZE {
+                        changed = true;
+                        match mutation {
+                            0 => f.borrow_mut().set_word(BASE, CALLBACK_OFFSET, CHILD_ORIGINAL),
+                            1 => f.borrow_mut().set_word(BASE, 0, 0),
+                            _ => f.borrow_mut().bytes[0x80] = b'X',
+                        }
+                    }
+                    success
+                });
+            assert!(changed);
+            assert_eq!(result, Err(DiscoveryError::ChangedRoot));
         }
     }
 

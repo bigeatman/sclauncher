@@ -35,6 +35,7 @@ type UiCallback = unsafe extern "C" fn(*const c_void);
 // Native SCR Control callback, separately verified from global event callbacks.
 type PanelCallback = unsafe extern "C" fn(*const c_void, *const c_void) -> u32;
 static PANEL_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+static MINIMAP_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static SEND_LOCK: Mutex<()> = Mutex::new(());
 static EVENT_THREAD: AtomicU32 = AtomicU32::new(0);
 // Installed providers outlive a match; ownership of input and queued actions
@@ -692,7 +693,7 @@ fn observed_selection_matches(runtime: &Runtime, state: &State, original: &[u32]
 fn trace_control(runtime: &Runtime, state: &mut State, stage: &str,
     delta_length: Option<usize>, opcode: Option<u8>)
 {
-    if state.control_traces >= 24 || !(matches!(state.kind, 35 | 38) || state.kind >= 106) { return; }
+    if state.control_traces >= 24 || (stage != "minimap-input-captured" && !(matches!(state.kind, 35 | 38) || state.kind >= 106)) { return; }
     state.control_traces += 1;
     let display = runtime.display_selection();
     let row = format!("{}\t{}\t{}\t{}\tControl trace; stage={stage}; native_count={}; native_type={}; pending={}; delta_len={}; opcode={}",
@@ -853,6 +854,7 @@ fn pump() {
     // Heap control slots are discovered/bound only while the game's UI thread
     // is dispatching a periodic callback. Worker registration never touches them.
     let panel_binding = ensure_panel_binding(runtime);
+    let minimap_binding = ensure_minimap_binding(runtime);
     let down = unsafe { GetAsyncKeyState(0xc0) } < 0;
     let rising = down && !state.last_key;
     state.last_key = down;
@@ -924,10 +926,15 @@ fn pump() {
             }
         }
     }
-    let detail = match panel_binding {
+    let panel_detail = match panel_binding {
         Ok(buttons) => format!("Command panel capture bound; buttons={buttons}"),
         Err(error) => format!("Command panel capture unavailable; {error}"),
     };
+    let minimap_detail = match minimap_binding {
+        Ok(()) => "Minimap capture bound".to_string(),
+        Err(error) => format!("Minimap capture unavailable; {error}"),
+    };
+    let detail = format!("{panel_detail}; {minimap_detail}");
     if state.panel_diagnostic.as_ref() != Some(&detail) {
         let row = format!("{}\t{}\t{}\t{}\t{}",state.frame,state.count,state.kind,state.sent,detail);
         if state.events.len() >= 256 { state.events.pop_front(); }
@@ -1340,6 +1347,43 @@ fn ensure_panel_binding(runtime: &Runtime) -> Result<usize,String> {
     }
     Ok(panel.buttons.len())
 }
+// Only the exact owned root wrapper with a verified saved native provider is
+// recognized outside game code. Child controls remain strictly native providers.
+fn owned_minimap_provider(callback: usize, original: usize, replacement: usize,
+    is_code: impl Fn(usize)->bool) -> bool
+{
+    callback == replacement && original != 0 && original != replacement && is_code(original)
+}
+fn ensure_minimap_binding(runtime: &Runtime) -> Result<(),String> {
+    if !session_allows_control(){return Err("Waiting for current game UI thread".into());}
+    let gui=runtime.gui.as_ref().ok_or("Minimap root unresolved")?;
+    let first=gui.first_dialog.read().ok_or("Minimap root list unavailable")?;
+    let replacement=minimap_callback as *const () as usize;
+    let is_code=|p:usize|p>=gui.code_start&&p.checked_add(16).is_some_and(|end|end<=gui.code_end);
+    let target=crate::gui_capture::discover_minimap(first,replacement,is_code,read_memory)
+        .map_err(|e|e.to_string())?.ok_or("Minimap root unavailable")?;
+    let saved=MINIMAP_ORIGINAL.load(Ordering::Acquire);
+    let original=if target.callback==replacement {
+        if !owned_minimap_provider(target.callback,saved,replacement,is_code) {
+            return Err("Minimap native provider missing or changed".into());
+        }
+        saved
+    } else {
+        if saved!=0&&saved!=target.callback{return Err("Minimap native provider changed".into());}
+        target.callback
+    };
+    crate::gui_capture::recheck_minimap(first,target,replacement,is_code,read_memory)
+        .map_err(|e|e.to_string())?;
+    if gui.first_dialog.read()!=Some(first){return Err("Minimap roots changed before binding".into());}
+    MINIMAP_ORIGINAL.compare_exchange(0,original,Ordering::AcqRel,Ordering::Acquire)
+        .or_else(|value|if value==original{Ok(value)}else{Err(value)})
+        .map_err(|_|"Minimap original changed")?;
+    let slot=crate::callback_binding::Slot{address:target.slot_address,original,replacement};
+    unsafe {crate::callback_binding::maintain(&[slot])}.map_err(|e|e.to_string())?;
+    Ok(())
+}
+#[derive(Clone,Copy)]
+enum ControlCaptureTarget { Panel, PanelChild(usize), Minimap }
 // A child can dispatch directly or under a parent that captured nothing. Only
 // an actual outer snapshot owns the observation and suppresses nested capture.
 fn panel_nested_input_changed(kind: Option<usize>, event: usize) -> bool {
@@ -1358,73 +1402,106 @@ fn observe_panel_call<C>(kind: Option<usize>, extended: Option<usize>, outer: bo
     finish(capture);
     result
 }
-unsafe extern "C" fn panel_callback(control: *const c_void, event: *const c_void) -> u32 {
-    unsafe { panel_dispatch(control,event,PANEL_ORIGINAL.load(Ordering::Acquire),None) }
+unsafe extern "C" fn panel_callback(control: *const c_void,event: *const c_void)->u32 {
+    unsafe {control_dispatch(control,event,PANEL_ORIGINAL.load(Ordering::Acquire),ControlCaptureTarget::Panel)}
 }
-unsafe extern "C" fn panel_child_callback<const INDEX: usize>(control: *const c_void, event: *const c_void) -> u32 {
-    unsafe { panel_dispatch(control,event,PANEL_CHILD_ORIGINALS[INDEX].load(Ordering::Acquire),Some(INDEX)) }
+unsafe extern "C" fn panel_child_callback<const INDEX:usize>(control: *const c_void,event: *const c_void)->u32 {
+    unsafe {control_dispatch(control,event,PANEL_CHILD_ORIGINALS[INDEX].load(Ordering::Acquire),ControlCaptureTarget::PanelChild(INDEX))}
 }
-unsafe fn panel_dispatch(control: *const c_void, event: *const c_void, address: usize, child: Option<usize>) -> u32 {
+// Forward native Minimap input unchanged, including its native cursor handling.
+// Observe its actual append; a camera click without an order is never promoted.
+fn observe_minimap_call<C>(kind:Option<usize>,outer:bool,
+    begin:impl FnOnce()->Option<C>,original:impl FnOnce()->u32,
+    finish:impl FnOnce(Option<C>))->u32
+{
+    observe_panel_call(kind,None,outer,begin,original,finish)
+}
+unsafe extern "C" fn minimap_callback(control: *const c_void,event: *const c_void)->u32 {
+    unsafe {control_dispatch(control,event,MINIMAP_ORIGINAL.load(Ordering::Acquire),ControlCaptureTarget::Minimap)}
+}
+unsafe fn control_dispatch(control: *const c_void,event: *const c_void,address:usize,
+    capture_target:ControlCaptureTarget)->u32
+{
     let session=SessionCallback::enter();
-    if address == 0 { FAULT.store(true,Ordering::Release); return 0; }
-    let original: PanelCallback = unsafe {std::mem::transmute(address)};
-    let previous_depth = CALLBACK_DEPTH.with(|depth| {let old=depth.get();depth.set(old.saturating_add(1));old});
-    let _depth = CallbackDepth(previous_depth);
-    let kind = (event as usize).checked_add(0x18).and_then(|p|read_integer(p,2));
-    if crate::control_capture::active() || IN_ORIGINAL.with(Cell::get) {
-        // Internal extended notifications belong to the outer observed call.
-        // A recursively dispatched new native input still invalidates its snapshot.
+    if address==0 {FAULT.store(true,Ordering::Release);return 0;}
+    let original:PanelCallback=unsafe {std::mem::transmute(address)};
+    let previous_depth=CALLBACK_DEPTH.with(|depth|{let old=depth.get();depth.set(old.saturating_add(1));old});
+    let _depth=CallbackDepth(previous_depth);
+    let kind=(event as usize).checked_add(0x18).and_then(|p|read_integer(p,2));
+    if crate::control_capture::active()||IN_ORIGINAL.with(Cell::get) {
+        // A delegated identical native input belongs to the outer observation.
+        // A recursively dispatched different input invalidates its snapshot.
         if panel_nested_input_changed(kind,event as usize) {
             CALLBACK_NESTED.with(|flag|flag.set(true));
         }
-        return observe_panel_call(kind, None, false, || None::<Capture>,
-            || unsafe {original(control,event)}, |_| {});
+        return unsafe {original(control,event)};
     }
-    if previous_depth == 0 { CALLBACK_NESTED.with(|flag|flag.set(false)); }
+    if previous_depth==0 {CALLBACK_NESTED.with(|flag|flag.set(false));}
     if !session.active() {
         if session.wrong_thread(){FAULT.store(true,Ordering::Release);}
         return unsafe {original(control,event)};
     }
-    let refreshed = std::panic::catch_unwind(refresh_bindings).map(|_|true)
+    let refreshed=std::panic::catch_unwind(refresh_bindings).map(|_|true)
         .unwrap_or_else(|_|{FAULT.store(true,Ordering::Release);false});
-    let extended = if kind == Some(0xe) { read_integer(event as usize,8) } else { None };
-    let _event_scope = crate::control_capture::EventScope::enter(event as usize);
-    observe_panel_call(kind, extended, refreshed, || std::panic::catch_unwind(|| {
-        let callback = child.map_or(panel_callback as *const () as usize, |index|panel_child_replacements()[index]);
-        let target = crate::gui_capture::Target{control:control as usize,
+    let extended=if kind==Some(0xe){read_integer(event as usize,8)}else{None};
+    let _event_scope=crate::control_capture::EventScope::enter(event as usize);
+    let begin=||std::panic::catch_unwind(|| {
+        let callback=match capture_target {
+            ControlCaptureTarget::Panel=>panel_callback as *const () as usize,
+            ControlCaptureTarget::PanelChild(index)=>panel_child_replacements()[index],
+            ControlCaptureTarget::Minimap=>minimap_callback as *const () as usize,
+        };
+        let target=crate::gui_capture::Target{control:control as usize,
             slot_address:(control as usize).checked_add(crate::gui_capture::CALLBACK_OFFSET).unwrap_or(0),callback};
-        if child.is_some() {
-            let runtime = RUNTIME.get()?;
-            let gui = runtime.gui.as_ref()?;
-            let first = gui.first_dialog.read()?;
-            let children = panel_child_replacements();
-            let is_code = |p: usize| p >= gui.code_start && p.checked_add(16).is_some_and(|end|end <= gui.code_end);
+        if let ControlCaptureTarget::PanelChild(_)=capture_target {
+            let runtime=RUNTIME.get()?;
+            let gui=runtime.gui.as_ref()?;
+            let first=gui.first_dialog.read()?;
+            let children=panel_child_replacements();
+            let is_code=|p:usize|p>=gui.code_start&&p.checked_add(16).is_some_and(|end|end<=gui.code_end);
             if crate::gui_capture::recheck_stat_child(first,target,panel_callback as *const () as usize,
-                &children,is_code,read_memory).is_err() || gui.first_dialog.read() != Some(first) {return None;}
-        } else if crate::gui_capture::recheck_target(target,read_memory).is_err() { return None; }
-        let capture = start_capture();
+                &children,is_code,read_memory).is_err()||gui.first_dialog.read()!=Some(first){return None;}
+        } else if let ControlCaptureTarget::Minimap=capture_target {
+            let runtime=RUNTIME.get()?;
+            let gui=runtime.gui.as_ref()?;
+            let first=gui.first_dialog.read()?;
+            let is_code=|p:usize|p>=gui.code_start&&p.checked_add(16).is_some_and(|end|end<=gui.code_end);
+            if !owned_minimap_provider(callback,MINIMAP_ORIGINAL.load(Ordering::Acquire),callback,is_code)
+                ||crate::gui_capture::recheck_minimap(first,target,callback,is_code,read_memory).is_err()
+                ||gui.first_dialog.read()!=Some(first){return None;}
+        } else if crate::gui_capture::recheck_target(target,read_memory).is_err(){return None;}
+        let capture=start_capture();
         if capture.is_some() {
             CALLBACK_NESTED.with(|flag|flag.set(false));
-            if child.is_some() || kind == Some(0xe) {
-                if let Some(runtime) = RUNTIME.get() {
-                    let mut state = STATE.lock().unwrap_or_else(|p|p.into_inner());
-                    trace_control(runtime, &mut state,
-                        if child.is_some() {"panel-child-captured"} else {"panel-activation-captured"},None,None);
+            if !matches!(capture_target,ControlCaptureTarget::Panel)||kind==Some(0xe) {
+                if let Some(runtime)=RUNTIME.get() {
+                    let mut state=STATE.lock().unwrap_or_else(|p|p.into_inner());
+                    trace_control(runtime,&mut state,match capture_target {
+                        ControlCaptureTarget::Minimap=>"minimap-input-captured",
+                        ControlCaptureTarget::PanelChild(_)=>"panel-child-captured",
+                        ControlCaptureTarget::Panel=>"panel-activation-captured",
+                    },None,None);
                 }
             }
         }
         capture
-    }).unwrap_or_else(|_|{FAULT.store(true,Ordering::Release);None}),
-    // No lock is held across the original; preserve both args and its consumed return.
-    || unsafe {original(control,event)}, |before| {
+    }).unwrap_or_else(|_|{FAULT.store(true,Ordering::Release);None});
+    // Preserve native args, exactly one original call, and its consumed return.
+    // No private lock spans the original or coordinate conversion.
+    let call_original=||unsafe {original(control,event)};
+    let finish=|before:Option<Capture>| {
         if std::panic::catch_unwind(|| {
             if let Some(capture)=before {
                 finish_capture(capture);
                 refresh_bindings();
                 pump();
             } else {refresh_bindings();}
-        }).is_err() {FAULT.store(true,Ordering::Release);}
-    })
+        }).is_err(){FAULT.store(true,Ordering::Release);}
+    };
+    match capture_target {
+        ControlCaptureTarget::Minimap=>observe_minimap_call(kind,refreshed,begin,call_original,finish),
+        _=>observe_panel_call(kind,extended,refreshed,begin,call_original,finish),
+    }
 }
 fn set_init_phase(phase: InitPhase, message: String) {
     let mut current = INIT_MESSAGE.lock().unwrap_or_else(|p| p.into_inner());
@@ -1520,7 +1597,7 @@ fn poll_registration() -> Result<RegistrationPoll, String> {
             CALLBACKS_READY.store(true, Ordering::Release);
             set_init_phase(
                 InitPhase::Ready,
-                "Game session connection ready; hydralisk lurker fix 20261009; live validation pending"
+                "Game session connection ready; minimap command fix 20261009; live validation pending"
                     .into(),
             );
             set_init_diagnostic(format!("READY; changed={}; {detail}", changed.len()));
@@ -1599,6 +1676,12 @@ impl Drop for CallbackDepth {
         CALLBACK_DEPTH.with(|depth| depth.set(self.0));
     }
 }
+// A native global handler may be delegated the exact input already observed by
+// Minimap or another console control. Only that actual snapshot can own it.
+fn global_nested_input_changed(event:usize)->bool {
+    IN_ORIGINAL.with(Cell::get) || !crate::control_capture::active()
+        || !crate::control_capture::same_event(event)
+}
 unsafe fn callback_dispatch(index: usize, event: *const c_void) {
     let session=SessionCallback::enter();
     runtime_alliance::note_callback(None);
@@ -1615,7 +1698,9 @@ unsafe fn callback_dispatch(index: usize, event: *const c_void) {
     });
     let _depth = CallbackDepth(previous_depth);
     if previous_depth != 0 || IN_ORIGINAL.with(Cell::get) {
-        CALLBACK_NESTED.with(|flag| flag.set(true));
+        if global_nested_input_changed(event as usize) {
+            CALLBACK_NESTED.with(|flag| flag.set(true));
+        }
         unsafe {
             original(event);
         }
@@ -1884,7 +1969,7 @@ fn initialize() -> Result<(), String> {
             // READY is justified only by the complete successful CAS operation.
             INSTALLED.store(true, Ordering::Release);
             STATE.lock().unwrap_or_else(|p| p.into_inner()).note(
-                "Unit control ready; hydralisk lurker fix 20261009; live validation pending",
+                "Unit control ready; minimap command fix 20261009; live validation pending",
             );
             return Ok(());
         }

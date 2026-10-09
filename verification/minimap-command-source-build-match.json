@@ -1,0 +1,157 @@
+[
+  {
+    "File": "src/alliance_diagnostics.rs",
+    "SHA256": "04dcfaa557e95eb95e38ff18fd1d929f50a1e78ca6d547a001a156f1475f1b37",
+    "Matched": true
+  },
+  {
+    "File": "src/alliance_dialog.rs",
+    "SHA256": "cc722b54edd2ecd7f767804ed2620ee6135d6b93e1e834267d14a3227c9fa200",
+    "Matched": true
+  },
+  {
+    "File": "src/alliance_output_context.rs",
+    "SHA256": "3bd2d7df2caa906ca903901cdafc8ec2f23f7689c182267beb85557ed9fef362",
+    "Matched": true
+  },
+  {
+    "File": "src/alliance_output_diagnostics.rs",
+    "SHA256": "08f10f87aa54cc44d671469e0aebe2eb4ce65cdd26a4c10b4f1fdd25060bcb31",
+    "Matched": true
+  },
+  {
+    "File": "src/alliance_requests.rs",
+    "SHA256": "eeef330cad2ea61ce7b82b34f41dd1f57ed034806eea14135eed25fa3e5300be",
+    "Matched": true
+  },
+  {
+    "File": "src/alliance_ui_probe.rs",
+    "SHA256": "5086c7f7781f213f0d3daea93e6e0120d9a22728cf82b65f799123c71001dcfe",
+    "Matched": true
+  },
+  {
+    "File": "src/alliance.rs",
+    "SHA256": "5e8bce1ad7aa5ee53d7c9fb395f2b13b8b5a330d817857c02affaddaa6b8c3a5",
+    "Matched": true
+  },
+  {
+    "File": "src/batch.rs",
+    "SHA256": "d6d26ed679f30f355de0efbeaca989487fa83fcf338a0ba50071013934cc0f55",
+    "Matched": true
+  },
+  {
+    "File": "src/buffer_rewrite.rs",
+    "SHA256": "d12b06008dccb45faec4e16248825b7f6f256b6b2a0ffa64a4a72bbe7203d7ba",
+    "Matched": true
+  },
+  {
+    "File": "src/building_commands.rs",
+    "SHA256": "16090f6debdc55e511bf37523e3885ff6fea6d84295a345509ccc64256b18963",
+    "Matched": true
+  },
+  {
+    "File": "src/callback_binding.rs",
+    "SHA256": "d964124e5c6102ad030fbc7206ea2f22c887613054b7139bc51f075c5a0a5b25",
+    "Matched": true
+  },
+  {
+    "File": "src/callback_startup.rs",
+    "SHA256": "49d4af4d102e596f98dad9741df06f6f5d8f6eb2aef6cc4f9b7dabe645230cb5",
+    "Matched": true
+  },
+  {
+    "File": "src/control_capture.rs",
+    "SHA256": "8e411ecfe918ada4422aee0dbee430d64be5ade47aba5843a7eef95df68c8f74",
+    "Matched": true
+  },
+  {
+    "File": "src/event_capture.rs",
+    "SHA256": "badee0b3f7cf4a7b351792b0573a9dcb01ea7ff3775e7d7216139dd230f72db9",
+    "Matched": true
+  },
+  {
+    "File": "src/game_session_diagnostics.rs",
+    "SHA256": "ff88c900f0414e6a574616c5c106291e2440a9db313fe13ee2bc67db941252a8",
+    "Matched": true
+  },
+  {
+    "File": "src/game_session.rs",
+    "SHA256": "e4a150b0cfadecfd10ca15dcb1880c8f405a3cf6bb661a37d0808d52bc6098be",
+    "Matched": true
+  },
+  {
+    "File": "src/gui_capture.rs",
+    "SHA256": "e3426e581ec6c7cbfffb84d839a7662fd4f3952a913e87ebeff0d144675d0fc7",
+    "Matched": true
+  },
+  {
+    "File": "src/lib.rs",
+    "SHA256": "f2a23a26d18e7e321189cbd21566703a8b58bd527a60ab3ac2566c6831937548",
+    "Matched": true
+  },
+  {
+    "File": "src/memory.rs",
+    "SHA256": "94bbebf76ff3f434997aecf86714d48bbc7c6900b473e605e9c001cbd6b9dc8e",
+    "Matched": true
+  },
+  {
+    "File": "src/minimap_alliance_button.rs",
+    "SHA256": "523b3bdf72692f56a2d5be43fd227c6560535f41a263167b0639be1508bcf72d",
+    "Matched": true
+  },
+  {
+    "File": "src/resolve_sender.rs",
+    "SHA256": "729f89f4ddd8239ac672a0d4c0b472215cfda947332d5f8769751e311b4a1c89",
+    "Matched": true
+  },
+  {
+    "File": "src/runtime_alliance.rs",
+    "SHA256": "18fb9ead884cc71032f2dd5cd593f857bbd470bbbea968a37ee4a750b548426e",
+    "Matched": true
+  },
+  {
+    "File": "src/runtime_building_tests.rs",
+    "SHA256": "3ac2fbb7b26619ea76f0a0390a41ca00cbac98d0ddf9dbf3c241178043dbf30b",
+    "Matched": true
+  },
+  {
+    "File": "src/runtime_minimap_tests.rs",
+    "SHA256": "ca6a17b1c3524c503ad817468e97b2df23c44b9999a5105a16711cbbd57a3647",
+    "Matched": true
+  },
+  {
+    "File": "src/runtime_morph_tests.rs",
+    "SHA256": "84f7dd1d15c82038f2286c4beabb6f9f3d3f69cb3066d239db58dae830d06083",
+    "Matched": true
+  },
+  {
+    "File": "src/runtime_tests.rs",
+    "SHA256": "2d0f807ac5926102b6fe0c13a436c8974a95bf21b907f7b858145e48e68b92f0",
+    "Matched": true
+  },
+  {
+    "File": "src/runtime.rs",
+    "SHA256": "84e76a4317411c4414cd182e7ec11dd4e085d4488b1d71ad570f9df919db0bf7",
+    "Matched": true
+  },
+  {
+    "File": "src/visuals.rs",
+    "SHA256": "4c4082e3fb1047e8b4ebbf3176da221942f6d3eab02287b7beada746023b0e4f",
+    "Matched": true
+  },
+  {
+    "File": "Cargo.toml",
+    "SHA256": "94caf1650da2ed0707953344af063d53e93b74d540bdbbf2102accb168ee135e",
+    "Matched": true
+  },
+  {
+    "File": "Cargo.lock",
+    "SHA256": "03a79ce7b1f61d87f5fbf8fcf55164af4fdfe555657e9e6b138bd2671ca9c3ea",
+    "Matched": true
+  },
+  {
+    "File": "build.rs",
+    "SHA256": "536e506bb90914c243a12b397b9a998f85ae2cbd9ba02dfd03a9e155ca5ca0f4",
+    "Matched": true
+  }
+]

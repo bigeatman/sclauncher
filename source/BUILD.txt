@@ -19,6 +19,6 @@ verification/AllianceTests.cs is a separate model/layout fixture with a Native s
 Compile it with source/managed/AllianceSnapshot.cs and AllianceOverlayForm.cs, x64,
 Drawing/Forms references and warnaserror. Do not combine it with production Native.cs.
 
-Published native runtime: hydralisk-lurker-fix-20261009.
+Published native runtime: minimap-command-fix-20261009.
 Other runtime components remain the validated game-session reconnect release.
 Current test counts and source correspondence: TEST-REPORT.md and verification/README.md.
